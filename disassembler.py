@@ -6,7 +6,7 @@ from typing import NamedTuple
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
-from utils import sjoin, quote
+from utils import sjoin, quote, format_bindata
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
@@ -171,14 +171,56 @@ class Function(NamedTuple):
 class Disassembly:
     functions: list[Function]
     strings: list[str]
+    gdata: bytes
+
+    def format(self, sw: StringWriter | None = None, **kwargs) -> str:
+        if sw is None:
+            sw = StringWriter()
+
+        if self.gdata:
+            sw.cr()
+            sw.println(".data")
+            sw.indent()
+            for line in format_bindata(self.gdata):
+                sw.println(line)
+            sw.dedent()
+            sw.println()
+
+        if self.functions:
+            sw.cr()
+            sw.println(".code")
+            for func in self.functions:
+                sw.println(f"{func.name}${func.nargs}: ; @0x{func.offset:X}")
+                sw.indent()
+                for ins in func.instructions:
+                    out = ins.opcode.mnemonic
+                    if ins.params:
+                        out += f" {sjoin(", ", ins.params)}"
+                    sw.println(out)
+                sw.dedent()
+                sw.println()
+
+        if self.strings:
+            sw.cr()
+            sw.println(".strings")
+            width = len(str(len(self.strings)))
+            for i, s in enumerate(self.strings):
+                idx = format(i, f"{width}")
+                sw.println(f"{idx}:{quote(s)}")
+
+        return str(sw)
+
+    def __str__(self) -> str:
+        return self.format()
 
 
 class Disassembler:
     def disassemble(self, source) -> Disassembly:
         self.source = source
-        self.functions: list[Function] = []
+        self.ds = Disassembly([], [], b"")
         self._read_scom()
-        return self._disassemble()
+        self._disassemble()
+        return self.ds
 
     def _read_scom(self) -> None:
         br = BinaryReader(self.source)
@@ -190,9 +232,8 @@ class Disassembler:
         self.code_size = br.u32()
         self.strings_size = br.u32()
 
-        self.gdata = b""
         if self.gdata_size > 0:
-            self.gdata = br.read_bytes(self.gdata_size)
+            self.ds.gdata = br.read_bytes(self.gdata_size)
 
         self.code: list[int] = []
         for _ in range(self.code_size):
@@ -202,7 +243,9 @@ class Disassembler:
         strings_start = br.tell()
         while br.tell() < strings_start + self.strings_size:
             # remember string offsets for later fixups
-            self.strings[br.tell() - strings_start] = br.cstr()
+            offset = br.tell() - strings_start
+            self.strings[offset] = br.cstr()
+        self.ds.strings = list(self.strings.values())
 
         self.fixups_size = br.u32()
         self.fixups: dict[int, FixupType] = {}
@@ -239,7 +282,7 @@ class Disassembler:
 
         assert br.u32() == 0xBEEFCAFE, "Invalid SCOM end signature"
 
-    def _disassemble(self) -> Disassembly:
+    def _disassemble(self):
         # exports can contain *both* functions and variables.
         # read exports table to find out where the functions begin and end
         self.func_names: dict[int, str] = {}
@@ -251,14 +294,12 @@ class Disassembler:
             self.func_names[e.address] = e.name
             entries.append(e.address)
         entries.sort()
-        entries.append(-1)
+        entries.append(len(self.code))
         ranges: list[tuple[int, int]] = list(zip(entries, entries[1:]))  # make pairs
 
         for s, e in ranges:
             func = self._dis_function(s, e)
-            self.functions.append(func)
-
-        return Disassembly(self.functions, list(self.strings.values()))
+            self.ds.functions.append(func)
 
     def _dis_function(self, start: int, end: int) -> Function:
         mangled_name = self.func_names[start]
@@ -283,13 +324,15 @@ class Disassembler:
             arg = self.code[idx]
             match f:
                 case "r":  # register
-                    params.append(Register(arg))
+                    params.append(Register(arg).name.lower())
                 case "a":  # argument, possible fixup
                     # is there a fixup for this index?
                     if idx in self.fixups:
                         match self.fixups[idx]:
                             case FixupType.STRING:
-                                params.append(self.strings[arg])
+                                params.append(quote(self.strings[arg]))
+                            case FixupType.GLOBAL_DATA:
+                                params.append(f"@{arg}")
                             case _:
                                 warnings.warn(f"Unsupported fixup: {self.fixups[idx]}")
                     else:

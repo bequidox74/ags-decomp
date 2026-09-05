@@ -1,3 +1,6 @@
+from utils import strip_lines
+
+
 class StringWriter:
     def __init__(self, indent: str | int = "  ") -> None:
         if isinstance(indent, int):
@@ -24,7 +27,7 @@ class StringWriter:
         self._current_indent = ""
 
     def print(self, s: str = "") -> None:
-        if self._current_indent:
+        if self._current_indent and s:
             self.buffer.append(self._current_indent)
         if s:
             self.buffer.append(s)
@@ -34,4 +37,4 @@ class StringWriter:
         self.buffer.append("\n")
 
     def __str__(self) -> str:
-        return "".join(self.buffer)
+        return strip_lines("".join(self.buffer))
