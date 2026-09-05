@@ -8,158 +8,92 @@ from typing import NamedTuple
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
-class Opcode(enum.IntEnum):
-    ADD = 1
-    SUB = 2
-    REGTOREG = 3
-    WRITELIT = 4
-    RET = 5
-    LITTOREG = 6
-    MEMREAD = 7
-    MEMWRITE = 8
-    MULREG = 9
-    DIVREG = 10
-    ADDREG = 11
-    SUBREG = 12
-    BITAND = 13
-    BITOR = 14
-    ISEQUAL = 15
-    NOTEQUAL = 16
-    GREATER = 17
-    LESSTHAN = 18
-    GTE = 19
-    LTE = 20
-    AND = 21
-    OR = 22
-    CALL = 23
-    MEMREADB = 24
-    MEMREADW = 25
-    MEMWRITEB = 26
-    MEMWRITEW = 27
-    JZ = 28
-    PUSHREG = 29
-    POPREG = 30
-    JMP = 31
-    MUL = 32
-    CALLEXT = 33
-    PUSHREAL = 34
-    SUBREALSTACK = 35
-    LINENUM = 36
-    CALLAS = 37
-    THISBASE = 38
-    NUMFUNCARGS = 39
-    MODREG = 40
-    XORREG = 41
-    NOTREG = 42
-    SHIFTLEFT = 43
-    SHIFTRIGHT = 44
-    CALLOBJ = 45
-    CHECKBOUNDS = 46
-    MEMWRITEPTR = 47
-    MEMREADPTR = 48
-    MEMZEROPTR = 49
-    MEMINITPTR = 50
-    LOADSPOFFS = 51
-    CHECKNULL = 52
-    FADD = 53
-    FSUB = 54
-    FMULREG = 55
-    FDIVREG = 56
-    FADDREG = 57
-    FSUBREG = 58
-    FGREATER = 59
-    FLESSTHAN = 60
-    FGTE = 61
-    FLTE = 62
-    ZEROMEMORY = 63
-    CREATESTRING = 64
-    STRINGSEQUAL = 65
-    STRINGSNOTEQ = 66
-    CHECKNULLREG = 67
-    LOOPCHECKOFF = 68
-    MEMZEROPTRND = 69
-    JNZ = 70
-    DYNAMICBOUNDS = 71
-    NEWARRAY = 72
-    NEWUSEROBJECT = 73
+@enum.unique
+class Opcode(enum.Enum):
+    NOP = (0, "NULL", 0)
+    ADD = (1, "addi", 2)
+    SUB = (2, "subi", 2)
+    REGTOREG = (3, "mov", 2)
+    WRITELIT = (4, "memwritelit", 2)
+    RET = (5, "ret", 0)
+    LITTOREG = (6, "movl", 2)
+    MEMREAD = (7, "memread4", 1)
+    MEMWRITE = (8, "memwrite4", 1)
+    MULREG = (9, "mul", 2)
+    DIVREG = (10, "div", 2)
+    ADDREG = (11, "add", 2)
+    SUBREG = (12, "sub", 2)
+    BITAND = (13, "and", 2)
+    BITOR = (14, "or", 2)
+    ISEQUAL = (15, "cmpeq", 2)
+    NOTEQUAL = (16, "cmpne", 2)
+    GREATER = (17, "gt", 2)
+    LESSTHAN = (18, "lt", 2)
+    GTE = (19, "gte", 2)
+    LTE = (20, "lte", 2)
+    AND = (21, "land", 2)
+    OR = (22, "lor", 2)
+    CALL = (23, "call", 1)
+    MEMREADB = (24, "memread1", 1)
+    MEMREADW = (25, "memread2", 1)
+    MEMWRITEB = (26, "memwrite1", 1)
+    MEMWRITEW = (27, "memwrite2", 1)
+    JZ = (28, "jzi", 1)
+    PUSHREG = (29, "push", 1)
+    POPREG = (30, "pop", 1)
+    JMP = (31, "jmpi", 1)
+    MUL = (32, "muli", 2)
+    CALLEXT = (33, "farcall", 1)
+    PUSHREAL = (34, "farpush", 1)
+    SUBREALSTACK = (35, "farsubsp", 1)
+    LINENUM = (36, "sourceline", 1)
+    CALLAS = (37, "callscr", 1)
+    THISBASE = (38, "thisaddr", 1)
+    NUMFUNCARGS = (39, "setfuncargs", 1)
+    MODREG = (40, "mod", 2)
+    XORREG = (41, "xor", 2)
+    NOTREG = (42, "not", 1)
+    SHIFTLEFT = (43, "shl", 2)
+    SHIFTRIGHT = (44, "shr", 2)
+    CALLOBJ = (45, "callobj", 1)
+    CHECKBOUNDS = (46, "checkbounds", 2)
+    MEMWRITEPTR = (47, "memwrite.ptr", 1)
+    MEMREADPTR = (48, "memread.ptr", 1)
+    MEMZEROPTR = (49, "memwrite.ptr.0", 0)
+    MEMINITPTR = (50, "meminit.ptr", 1)
+    LOADSPOFFS = (51, "load.sp.offs", 1)
+    CHECKNULL = (52, "checknull.ptr", 0)
+    FADD = (53, "faddi", 2)
+    FSUB = (54, "fsubi", 2)
+    FMULREG = (55, "fmul", 2)
+    FDIVREG = (56, "fdiv", 2)
+    FADDREG = (57, "fadd", 2)
+    FSUBREG = (58, "fsub", 2)
+    FGREATER = (59, "fgt", 2)
+    FLESSTHAN = (60, "flt", 2)
+    FGTE = (61, "fgte", 2)
+    FLTE = (62, "flte", 2)
+    ZEROMEMORY = (63, "zeromem", 1)
+    CREATESTRING = (64, "newstring", 1)
+    STRINGSEQUAL = (65, "streq", 2)
+    STRINGSNOTEQ = (66, "strne", 2)
+    CHECKNULLREG = (67, "checknull", 1)
+    LOOPCHECKOFF = (68, "loopcheckoff", 0)
+    MEMZEROPTRND = (69, "memwrite.ptr.0.nd", 0)
+    JNZ = (70, "jnzi", 1)
+    DYNAMICBOUNDS = (71, "dynamicbounds", 1)
+    NEWARRAY = (72, "newarray", 3)
+    NEWUSEROBJECT = (73, "newuserobject", 2)
+    
+    def __init__(self, _, mnemonic: str, nargs: int) -> None:
+        self.mnemonic = mnemonic
+        self.nargs = nargs
 
+    def __new__(cls, value: int, *_):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        return obj
 
-OPCODE_TO_NAME = {
-    Opcode.ADD: "addi",
-    Opcode.SUB: "subi",
-    Opcode.REGTOREG: "mov",
-    Opcode.WRITELIT: "memwritelit",
-    Opcode.RET: "ret",
-    Opcode.LITTOREG: "movl",
-    Opcode.MEMREAD: "memread4",
-    Opcode.MEMWRITE: "memwrite4",
-    Opcode.MULREG: "mul",
-    Opcode.DIVREG: "div",
-    Opcode.ADDREG: "add",
-    Opcode.SUBREG: "sub",
-    Opcode.BITAND: "and",
-    Opcode.BITOR: "or",
-    Opcode.ISEQUAL: "cmpeq",
-    Opcode.NOTEQUAL: "cmpne",
-    Opcode.GREATER: "gt",
-    Opcode.LESSTHAN: "lt",
-    Opcode.GTE: "gte",
-    Opcode.LTE: "lte",
-    Opcode.AND: "land",
-    Opcode.OR: "lor",
-    Opcode.CALL: "call",
-    Opcode.MEMREADB: "memread1",
-    Opcode.MEMREADW: "memread2",
-    Opcode.MEMWRITEB: "memwrite1",
-    Opcode.MEMWRITEW: "memwrite2",
-    Opcode.JZ: "jzi",
-    Opcode.PUSHREG: "push",
-    Opcode.POPREG: "pop",
-    Opcode.JMP: "jmpi",
-    Opcode.MUL: "muli",
-    Opcode.CALLEXT: "farcall",
-    Opcode.PUSHREAL: "farpush",
-    Opcode.SUBREALSTACK: "farsubsp",
-    Opcode.LINENUM: "sourceline",
-    Opcode.CALLAS: "callscr",
-    Opcode.THISBASE: "thisaddr",
-    Opcode.NUMFUNCARGS: "setfuncargs",
-    Opcode.MODREG: "mod",
-    Opcode.XORREG: "xor",
-    Opcode.NOTREG: "not",
-    Opcode.SHIFTLEFT: "shl",
-    Opcode.SHIFTRIGHT: "shr",
-    Opcode.CALLOBJ: "callobj",
-    Opcode.CHECKBOUNDS: "checkbounds",
-    Opcode.MEMWRITEPTR: "memwrite.ptr",
-    Opcode.MEMREADPTR: "memread.ptr",
-    Opcode.MEMZEROPTR: "memwrite.ptr.0",
-    Opcode.MEMINITPTR: "meminit.ptr",
-    Opcode.LOADSPOFFS: "load.sp.offs",
-    Opcode.CHECKNULL: "checknull.ptr",
-    Opcode.FADD: "faddi",
-    Opcode.FSUB: "fsubi",
-    Opcode.FMULREG: "fmul",
-    Opcode.FDIVREG: "fdiv",
-    Opcode.FADDREG: "fadd",
-    Opcode.FSUBREG: "fsub",
-    Opcode.FGREATER: "fgt",
-    Opcode.FLESSTHAN: "flt",
-    Opcode.FGTE: "fgte",
-    Opcode.FLTE: "flte",
-    Opcode.ZEROMEMORY: "zeromem",
-    Opcode.CREATESTRING: "newstring",
-    Opcode.STRINGSEQUAL: "streq",
-    Opcode.STRINGSNOTEQ: "strne",
-    Opcode.CHECKNULLREG: "checknull",
-    Opcode.LOOPCHECKOFF: "loopcheckoff",
-    Opcode.MEMZEROPTRND: "memwrite.ptr.0.nd",
-    Opcode.JNZ: "jnzi",
-    Opcode.DYNAMICBOUNDS: "dynamicbounds",
-    Opcode.NEWARRAY: "newarray",
-    Opcode.NEWUSEROBJECT: "newuserobject",
-}
-NAME_TO_OPCODE = dict((v, k) for (k, v) in OPCODE_TO_NAME.items())
 
 class FixupType(enum.IntEnum):
     NO_FIXUP = 0
@@ -172,7 +106,7 @@ class FixupType(enum.IntEnum):
 
 
 class Export(NamedTuple):
-    export: str
+    name: str
     address: int
 
 
@@ -185,7 +119,7 @@ class Section(NamedTuple):
 class Script:
     version: int
     global_data: bytes
-    code: bytes
+    code: list[int]
     strings: list[str]
     fixup_types: list[FixupType]
     fixups: list[int]
@@ -208,9 +142,9 @@ class Script:
         if global_data_size > 0:
             global_data = br.read_bytes(global_data_size)
 
-        code = b""
-        if code_size > 0:
-            code = br.read_bytes(code_size * 4)
+        code = []
+        for _ in range(code_size):
+            code.append(br.u32())
 
         strings = []
         start_offset = br.tell()
@@ -241,6 +175,9 @@ class Script:
         sections = []
         for _ in range(sections_size):
             sections.append(Section(br.cstr(), br.i32()))
+
+        signature = br.read_bytes(4)
+        assert signature == b"\xfe\xca\xef\xbe"
 
         return Script(
             version,
