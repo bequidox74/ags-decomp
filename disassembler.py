@@ -197,6 +197,7 @@ class Disassembly:
                     if is_linenum:
                         sw.indent()
                 sw.dedent()
+                sw.dedent()
                 sw.println()
 
         if self.strings:
