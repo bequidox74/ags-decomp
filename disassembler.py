@@ -263,7 +263,7 @@ class Disassembler:
         for _ in range(self.imports_size):
             import_ = br.cstr()
             if import_:  # skip empty imports
-                self.imports[br.tell()] = br.cstr()
+                self.imports[br.tell()] = import_
 
         self.exports_size = br.u32()
         self.exports: dict[int, Export] = {}
