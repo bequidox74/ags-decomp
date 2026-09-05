@@ -3,7 +3,17 @@ from typing import NamedTuple
 
 from script import Opcode, Script
 from string_writer import StringWriter
-from utils import sjoin
+from utils import sjoin, quote
+
+REGISTERS = {
+    1: "sp",  # stack pointer
+    2: "mar",  # memory address
+    3: "ax",  # general purpose A
+    4: "bx",  # g.p. B
+    5: "cx",  # g.p. C, (array index)
+    6: "op",  # object pointer
+    7: "dx",  # g.p. D
+}
 
 
 class Instruction(NamedTuple):
@@ -11,7 +21,18 @@ class Instruction(NamedTuple):
     params: list
 
     def format(self) -> str:
-        return f"{self.opcode.mnemonic} {sjoin(", ", self.params)}"
+        p = self.params.copy()
+        opc = self.opcode
+        assert opc.nargs == len(p), "Instruction parameter count mismatch"
+        for i in range(len(p)):
+            match opc.args_format[i]:
+                case "r":
+                    p[i] = REGISTERS[p[i]]
+                case "a":
+                    pass  # leave as is (TODO: float heuristic?)
+                case _:
+                    raise RuntimeError(f"Illegal args format: {opc.args_format}")
+        return f"{self.opcode.mnemonic} {sjoin(", ", p)}"
 
     def __str__(self) -> str:
         return self.format()
@@ -38,13 +59,11 @@ class Disassembly:
             sw = StringWriter()
 
         sw.println(f"; AGS SCOM version {self.script.version}")
-        sw.println(f"; {len(self.script.imports)} imports, {len(self.script.exports)} exports")
         sw.println()
 
         # .data
         if self.script.global_data:
             sw.println(f".data ; {len(self.script.global_data)} bytes")
-            sw.indent()
 
             gd = self.script.global_data
             for i in range(0, len(gd), 16):
@@ -56,9 +75,8 @@ class Disassembly:
         # .code
         if self.functions:
             sw.println(".code")
-            sw.indent()
 
-            for func in self.functions:
+            for i, func in enumerate(self.functions):
                 sw.println(
                     f"{func.name}${func.nargs}: ; @0x{func.offset:X}, {func.nargs} args"
                 )
@@ -66,8 +84,20 @@ class Disassembly:
                 for ins in func.instructions:
                     sw.println(str(ins))
                 sw.dedent()
-                sw.println()
 
+                # remove ugly double newline
+                if i != len(self.functions) - 1:
+                    sw.println()
+
+            sw.cr()
+            sw.println()
+
+        # .strings
+        if self.script.strings:
+            sw.println(".strings")
+            width = len(str(len(self.script.strings)))
+            for i, s in enumerate(self.script.strings):
+                sw.println(f"{format(i, f"0{width}")}: {quote(s)}")
             sw.cr()
             sw.println()
 
@@ -115,9 +145,9 @@ class Disassembler:
         while i < len(code):
             opc = Opcode(code[i] & 0x00FFFFFF)
             params = []
-            for n in range(opc.nargs):
-                params.append(code[i + 1 + n])
+            for _ in range(opc.nargs):
                 i += 1
+                params.append(code[i])
             assert len(params) <= 3, "Too many parameters for instruction"
             i += 1
             func.instructions.append(Instruction(opc, params))
