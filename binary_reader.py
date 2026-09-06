@@ -4,9 +4,7 @@ import io
 import os
 import struct
 from pathlib import Path
-from typing import BinaryIO, Literal
-
-from typing_extensions import Self
+from typing import BinaryIO, Literal, Self
 
 # Vibecoded with ChatGPT to avoid an external dependency.
 

@@ -254,9 +254,8 @@ class Disassembly:
 
         if self.imports:
             sw.cr()
-            sw.println(
-                f".imports[{self.imports_size}] ; {self.imports_size} names, {len(self.imports)} referenced"
-            )
+            comment = f" ; {self.imports_size} names, {len(self.imports)} referenced"
+            sw.println(f".imports[{self.imports_size}]{comment}")
             for offset, name in self.imports.items():
                 sw.println(f"{offset}: {name}")
             sw.println()
@@ -391,6 +390,8 @@ class Disassembly:
                 label = Label(from_, to)
                 self.jumps[to] = label
                 return Instruction(opcode, [FixedUpValue(to)])
+            case _:
+                pass
 
         params: list[Parameter] = []
         for i, f in enumerate(opcode.args_format):
