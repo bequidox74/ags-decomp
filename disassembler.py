@@ -190,6 +190,7 @@ class Disassembly:
         self.source = source
         self.functions: list[Function] = []
         self.gdata: bytes = b""
+        self.gdata_offset = 0
         self.scom_version: int = 90
 
         self.code: list[int] = []
@@ -289,6 +290,7 @@ class Disassembly:
         self.strings_size = br.u32()
 
         if self.gdata_size > 0:
+            self.gdata_offset = br.tell()
             self.gdata = br.read_bytes(self.gdata_size)
 
         for _ in range(self.code_size):
