@@ -36,6 +36,23 @@ class Decompiler:
         GLOBAL = auto()
 
     WT = WriteTarget
+    BINOPS = {
+        Opcode.ADDREG: BinOp.ADD,
+        Opcode.SUBREG: BinOp.SUB,
+        Opcode.MULREG: BinOp.MUL,
+        Opcode.DIVREG: BinOp.DIV,
+        Opcode.MODREG: BinOp.MOD,
+        Opcode.BITAND: BinOp.BITAND,
+        Opcode.BITOR: BinOp.BITOR,
+        Opcode.ISEQUAL: BinOp.EQ,
+        Opcode.NOTEQUAL: BinOp.NEQ,
+        Opcode.GTE: BinOp.GTE,
+        Opcode.GREATER: BinOp.GT,
+        Opcode.LTE: BinOp.LTE,
+        Opcode.LESSTHAN: BinOp.LT,
+        Opcode.AND: BinOp.AND,
+        Opcode.OR: BinOp.OR,
+    }
 
     def __init__(self, dis: Disassembly) -> None:
         self.dis = dis
@@ -111,18 +128,37 @@ class Decompiler:
     def _dc_func(self, func: Function) -> None:
         self.sp = 0  # new stack frame; reset SP
         self.local_id = 0
+        self.stack: list[STExpression] = []
         self.locals: dict[MemOffset, LocalVar] = {}
         self.stfunc = STFunction("function", func.name, [], [])
         for ins in func.instructions:
             self._dc_ins(ins)
 
     def _dc_ins(self, ins: Instruction) -> None:
+        if ins.opcode in self.BINOPS:
+            ra = ins.get_reg(0)
+            rb = ins.get_reg(1)
+            a = self._make_expr(ra)
+            b = self._make_expr(rb)
+            expr = STBinaryExpression(a, b, self.BINOPS[ins.opcode])
+            self.registers[ra] = expr
+            return
+
         match ins.opcode:
             case Opcode.LINENUM:
                 self.linenum = ins.get_int(0)
 
             case Opcode.THISBASE:
                 self.thisbase = ins.get_int(0)
+
+            case Opcode.PUSHREG:
+                reg = ins.get_reg(0)
+                expr = self._make_expr(reg)
+                self.stack.append(expr)
+
+            case Opcode.POPREG:
+                reg = ins.get_reg(0)
+                self.registers[reg] = self.stack.pop()
 
             case Opcode.REGTOREG:
                 src = ins.get_reg(0)
@@ -172,6 +208,7 @@ class Decompiler:
                 val = self._fixup(ins.get_fup(0))
                 assert isinstance(val, int)
                 self.mar = self.sp - val
+                self.write_target = self.WT.LOCAL
 
             case Opcode.RET:
                 pass  # TODO!
@@ -239,7 +276,7 @@ class Decompiler:
                 self._emit_global(expr, size)
 
     def _emit_local(self, expr: STExpression, size: int) -> None:
-        lvar = self._get_local(self.sp, size)
+        lvar = self._get_local(self.mar, size)
         type_ = None
         if lvar.newly_created:
             # newly created, need to define

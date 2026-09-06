@@ -9,11 +9,21 @@ from string_writer import StringWriter
 
 
 class BinOp(Enum):
-    PLUS = "+"
-    MINUS = "-"
+    ADD = "+"
+    SUB = "-"
     MUL = "*"
     DIV = "/"
     MOD = "%"
+    BITAND = "&"
+    BITOR = "|"
+    EQ = "=="
+    NEQ = "!="
+    GTE = ">="
+    GT = ">"
+    LTE = "<="
+    LT = "<"
+    AND = "&&"
+    OR = "||"
 
 
 class AST(ABC):
@@ -39,6 +49,13 @@ class STBinaryExpression(STExpression):
     left: STExpression
     right: STExpression
     operation: BinOp
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append("(")
+        self.left.emit(sw)
+        sw.append(f" {self.operation.value} ")
+        self.right.emit(sw)
+        sw.append(")")
 
 
 class STItem(AST):
