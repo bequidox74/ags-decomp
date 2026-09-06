@@ -47,7 +47,7 @@ class STItem(AST):
 
 @dataclass
 class STType(AST):  # wrapper for by-reference access
-    t: Literal["int", "char", "float", "bool", "String"]
+    t: Literal["int", "char", "short", "float", "bool", "String"]
     guess: bool = True
 
     def emit(self, sw: StringWriter) -> None:
@@ -56,11 +56,12 @@ class STType(AST):  # wrapper for by-reference access
 
 @dataclass
 class STScript(AST):
-    items: Sequence[STItem | STVarDeclaration]
+    items: Sequence[STItem]
 
     def emit(self, sw: StringWriter) -> None:
         for item in self.items:
             item.emit(sw)
+            sw.println()
 
 
 class STStatement(AST):
@@ -75,8 +76,11 @@ class STAssignmentTarget(AST):
 class STVarAssignTarget(STAssignmentTarget):
     name: str
     array_index: STExpression | None
+    type_: STType | None = None
 
     def emit(self, sw: StringWriter) -> None:
+        if self.type_ is not None:
+            sw.append(self.type_.t + " ")
         sw.append(f"{self.name}")
         if self.array_index is not None:
             sw.append("[")
@@ -86,7 +90,7 @@ class STVarAssignTarget(STAssignmentTarget):
 
 @dataclass
 class STAssignment(STStatement):
-    lhs: STAssignmentTarget | STVarDeclaration
+    lhs: STAssignmentTarget
     rhs: STExpression
 
     def emit(self, sw: StringWriter) -> None:
@@ -94,6 +98,7 @@ class STAssignment(STStatement):
         self.lhs.emit(sw)
         sw.append(" = ")
         self.rhs.emit(sw)
+        sw.append(";")
 
 
 @dataclass
@@ -104,7 +109,7 @@ class STVarDeclaration(STStatement, STItem):
     def emit(self, sw: StringWriter) -> None:
         sw.print()
         self.type_.emit(sw)
-        sw.append(f" {self.name}")
+        sw.append(f" {self.name};")
 
 
 @dataclass
@@ -122,11 +127,10 @@ class STFunction(STItem):
 
     def emit(self, sw: StringWriter) -> None:
         sw.println(f"function {self.name}() {{")
-        # sw.indent()  # FIXME
+        sw.indent()
         for stmt in self.statements:
             stmt.emit(sw)
-            sw.append(";")
             sw.println()
-        # sw.dedent()
+        sw.dedent()
         sw.println("}")
         sw.println()

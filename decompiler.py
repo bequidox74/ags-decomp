@@ -145,7 +145,12 @@ class Decompiler:
                         # prepare write to global
                         self.write_target = self.WriteTarget.GLOBAL
 
-            case Opcode.ZEROMEMORY | Opcode.MEMWRITE:
+            case (
+                Opcode.ZEROMEMORY
+                | Opcode.MEMWRITE
+                | Opcode.MEMWRITEB
+                | Opcode.MEMWRITEW
+            ):
                 self._handle_memwrite(ins)
 
             case Opcode.ADD | Opcode.SUB:
@@ -189,8 +194,12 @@ class Decompiler:
         match ins.opcode:
             case Opcode.ZEROMEMORY:  # zeromem
                 self._write_zeros(ins)
+            case Opcode.MEMWRITEB:  # memwrite1
+                self._write_register(ins, 1)
+            case Opcode.MEMWRITEW:  # memwrite2
+                self._write_register(ins, 2)
             case Opcode.MEMWRITE:  # memwrite4
-                self._write4b(ins)
+                self._write_register(ins, 4)
 
     def _write_zeros(self, ins: Instruction) -> None:
         # global vars are not initialized at runtime
@@ -204,15 +213,20 @@ class Decompiler:
         lvar = self._get_local(self.sp, size)
 
         # determine appropriate type -- TODO!
-        if size == 4:
-            lvar.type_ = STType("int")
-        else:
-            raise NotImplementedError
+        match size:
+            case 1:
+                lvar.type_ = STType("char")
+            case 2:
+                lvar.type_ = STType("short")
+            case 4:
+                lvar.type_ = STType("int")
+            case _:
+                raise NotImplementedError
 
         stmt = STVarDeclaration(lvar.type_, f"local{lvar.id_}")
         self.stfunc.statements.append(stmt)
 
-    def _write4b(self, ins: Instruction) -> None:
+    def _write_register(self, ins: Instruction, size: int) -> None:
         # writing int/float/pointer, assume int initially.
         # current SP tells us what variable is being written.
         reg = ins.get_reg(0)
@@ -220,29 +234,38 @@ class Decompiler:
 
         match self.write_target:
             case self.WT.LOCAL:
-                self._emit_local_4b(expr)
+                self._emit_local(expr, size)
             case self.WT.GLOBAL:
-                self._emit_global_4b(expr)
+                self._emit_global(expr, size)
 
-    def _emit_local_4b(self, expr: STExpression) -> None:
-        lvar = self._get_local(self.sp, 4)
+    def _emit_local(self, expr: STExpression, size: int) -> None:
+        lvar = self._get_local(self.sp, size)
+        type_ = None
         if lvar.newly_created:
             # newly created, need to define
-            lvar.type_ = STType("int")
-            lhs = STVarDeclaration(lvar.type_, lvar.name)
-        else:
-            # existing variable, simply assign
-            lhs = STVarAssignTarget(lvar.name, None)
-            pass
+            type_ = self._default_type_for_size(size)
+            lvar.type_ = type_
+        lhs = STVarAssignTarget(lvar.name, None, type_)
         stmt = STAssignment(lhs, expr)
         self.stfunc.statements.append(stmt)
 
-    def _emit_global_4b(self, expr: STExpression) -> None:
-        gvar = self._get_global(self.mar, 4)
-        gvar.type_ = STType("int")
+    def _emit_global(self, expr: STExpression, size: int) -> None:
+        gvar = self._get_global(self.mar, size)
+        gvar.type_ = self._default_type_for_size(size)
         lhs = STVarAssignTarget(gvar.name, None)
         stmt = STAssignment(lhs, expr)
         self.stfunc.statements.append(stmt)
+
+    def _default_type_for_size(self, size: int) -> STType:
+        match size:
+            case 1:
+                return STType("char")
+            case 2:
+                return STType("short")
+            case 4:
+                return STType("int")
+            case _:
+                raise RuntimeError
 
     def _make_expr(self, reg: Register) -> STExpression:
         rv = self.registers[reg]
