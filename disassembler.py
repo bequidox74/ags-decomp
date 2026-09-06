@@ -1,12 +1,11 @@
 import enum
-import warnings
-
-from dataclasses import dataclass, field
-from typing import Any, NamedTuple, TypeAlias
+import itertools
+from dataclasses import dataclass
+from typing import NamedTuple, TypeAlias
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
-from utils import sjoin, quote, format_bindata
+from utils import format_bindata, quote, sjoin
 
 Primitive: TypeAlias = int | str | float
 
@@ -238,7 +237,7 @@ class Disassembly:
                     if is_linenum:
                         sw.dedent()
                     if ins.params:
-                        out += f" {sjoin(", ", ins.params)}"
+                        out += f" {sjoin(', ', ins.params)}"
                     sw.println(out)
                     if is_linenum:
                         sw.indent()
@@ -362,7 +361,7 @@ class Disassembly:
             entries.append(e.address)
         entries.sort()
         entries.append(len(self.code))
-        ranges: list[tuple[int, int]] = list(zip(entries, entries[1:]))  # make pairs
+        ranges: list[tuple[int, int]] = list(itertools.pairwise(entries))  # make pairs
 
         for s, e in ranges:
             func = self._dis_function(s, e)

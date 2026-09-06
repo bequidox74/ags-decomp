@@ -1,9 +1,9 @@
-from typing import Iterable
+from collections.abc import Iterable
 from itertools import batched
 
 
 def sjoin(joiner: str, it: Iterable):
-    return joiner.join((str(x) for x in it))
+    return joiner.join(str(x) for x in it)
 
 
 def quote(s: str) -> str:

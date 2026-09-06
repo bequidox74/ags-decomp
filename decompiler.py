@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum, auto
+
 from disassembler import *
 from syntax_tree import *
 

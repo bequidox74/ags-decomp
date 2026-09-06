@@ -6,7 +6,10 @@ import struct
 from pathlib import Path
 from typing import BinaryIO, Literal
 
+from typing_extensions import Self
+
 # Vibecoded with ChatGPT to avoid an external dependency.
+
 
 class BinaryReader:
     """
@@ -31,7 +34,7 @@ class BinaryReader:
         if isinstance(source, (bytes, bytearray, memoryview)):
             self._stream = io.BytesIO(bytes(source))
         elif isinstance(source, (str, os.PathLike, Path)):
-            self._stream = open(source, "rb")
+            self._stream = open(source, "rb")  # noqa: SIM115
             self._owns_file = True
         elif hasattr(source, "read") and hasattr(source, "seek"):
             self._stream = source
@@ -208,7 +211,7 @@ class BinaryReader:
         if self._owns_file:
             self._stream.close()
 
-    def __enter__(self) -> "BinaryReader":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

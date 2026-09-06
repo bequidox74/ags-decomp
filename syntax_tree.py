@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Sequence
+from typing import Literal
 
 from string_writer import StringWriter
 
@@ -97,9 +98,7 @@ class STBinaryExpression(STExpression):
             return True
         if child.precedence > parent.precedence:
             return False
-        if side == "right":
-            return True
-        return False
+        return side == "right"
 
 
 @dataclass
@@ -110,9 +109,9 @@ class STVarExpression(STExpression):
     def emit(self, sw: StringWriter) -> None:
         sw.append(self.name)
         if self.array_index is not None:
-            sw.append(f"[")
+            sw.append("[")
             self.array_index.emit(sw)
-            sw.append(f"]")
+            sw.append("]")
 
 
 class STItem(AST):
