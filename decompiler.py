@@ -78,7 +78,6 @@ class Decompiler:
     @property
     def sp(self) -> int:
         v = self.registers[Register.SP]
-        assert isinstance(v, int)
         return v
 
     @sp.setter
@@ -86,13 +85,12 @@ class Decompiler:
         self.registers[Register.SP] = v
 
     @property
-    def mar(self) -> int:
+    def mar(self) -> Any:
         v = self.registers[Register.MAR]
-        assert isinstance(v, int)
         return v
 
     @mar.setter
-    def mar(self, v: int) -> None:
+    def mar(self, v: Any) -> None:
         self.registers[Register.MAR] = v
 
     def _next_local_id(self) -> int:
@@ -172,14 +170,19 @@ class Decompiler:
             case Opcode.LITTOREG:
                 reg = ins.get_reg(0)
                 val = ins.get_fup(1)
-                self.registers[reg] = self._fixup(val)
 
-                if reg != Register.MAR:
-                    return
                 match val.type_:
-                    case FixupType.GLOBAL_DATA | FixupType.IMPORT:
-                        # prepare write to global
-                        self.write_target = self.WriteTarget.GLOBAL
+                    case FixupType.IMPORT:
+                        assert isinstance(val.fixed, str)
+                        self.registers[reg] = STVarExpression(val.fixed, None)
+                    case _:
+                        self.registers[reg] = val
+                if reg == Register.MAR:
+                    if (
+                        val.type_ == FixupType.GLOBAL_DATA
+                        or val.type_ == FixupType.IMPORT
+                    ):
+                        self.write_target = self.WT.GLOBAL
 
             case (
                 Opcode.ZEROMEMORY
@@ -188,6 +191,13 @@ class Decompiler:
                 | Opcode.MEMWRITEW
             ):
                 self._handle_memwrite(ins)
+
+            case Opcode.MEMREADB:
+                self._handle_memread(ins, 1)
+            case Opcode.MEMREADW:
+                self._handle_memread(ins, 2)
+            case Opcode.MEMREAD:
+                self._handle_memread(ins, 4)
 
             case Opcode.ADD | Opcode.SUB:
                 reg = ins.get_reg(0)
@@ -217,14 +227,8 @@ class Decompiler:
                 raise NotImplementedError
 
     def _fixup(self, v: FixedUpValue) -> Primitive:
-        match v.type_:
-            case FixupType.NO_FIXUP:
-                return v.original
-            case _:
-                if v.fixed is None:
-                    return v.original
-                else:
-                    return v.fixed
+        assert v.type_ == FixupType.NO_FIXUP
+        return v.original
 
     def _handle_memwrite(self, ins: Instruction) -> None:
         # any write to memory emits an assignment
@@ -237,6 +241,19 @@ class Decompiler:
                 self._write_register(ins, 2)
             case Opcode.MEMWRITE:  # memwrite4
                 self._write_register(ins, 4)
+
+    def _handle_memread(self, ins: Instruction, size: int) -> None:
+        reg = ins.get_reg(0)
+        val = self.mar
+        if isinstance(val, STExpression):
+            self.registers[reg] = val
+        elif isinstance(val, FixedUpValue):
+            if val.type_ == FixupType.GLOBAL_DATA:
+                gvar = self._get_global(val.original, size)
+                assert gvar.size == size
+                self.registers[reg] = STVarExpression(gvar.name, None)
+        else:
+            raise RuntimeError
 
     def _write_zeros(self, ins: Instruction) -> None:
         # global vars are not initialized at runtime
@@ -276,6 +293,7 @@ class Decompiler:
                 self._emit_global(expr, size)
 
     def _emit_local(self, expr: STExpression, size: int) -> None:
+        assert isinstance(self.mar, int)
         lvar = self._get_local(self.mar, size)
         type_ = None
         if lvar.newly_created:
@@ -287,7 +305,14 @@ class Decompiler:
         self.stfunc.statements.append(stmt)
 
     def _emit_global(self, expr: STExpression, size: int) -> None:
-        gvar = self._get_global(self.mar, size)
+        if isinstance(self.mar, STVarExpression):
+            target = self.mar
+            # assigning to a global import -- emit immediately
+            stmt = STAssignment(STVarAssignTarget(target.name, None), expr)
+            self.stfunc.statements.append(stmt)
+            return
+
+        gvar = self._get_global(self.mar.original, size)
         gvar.type_ = self._default_type_for_size(size)
         lhs = STVarAssignTarget(gvar.name, None)
         stmt = STAssignment(lhs, expr)
@@ -310,6 +335,8 @@ class Decompiler:
             return rv
         elif isinstance(rv, int | float | str):
             return STLiteral(rv)
+        elif isinstance(rv, FixedUpValue) and rv.type_ == FixupType.NO_FIXUP:
+            return STLiteral(rv.original)
         else:
             raise NotImplementedError
 
@@ -331,6 +358,7 @@ class Decompiler:
         gvar: GlobalVar
         if mar not in self.globals:
             gvar = GlobalVar(size, self._next_global_id())
+            gvar.type_ = self._default_type_for_size(size)
             self.globals[mar] = gvar
         else:
             gvar = self.globals[mar]

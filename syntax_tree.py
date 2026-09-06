@@ -102,6 +102,19 @@ class STBinaryExpression(STExpression):
         return False
 
 
+@dataclass
+class STVarExpression(STExpression):
+    name: str
+    array_index: STExpression | None
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append(self.name)
+        if self.array_index is not None:
+            sw.append(f"[")
+            self.array_index.emit(sw)
+            sw.append(f"]")
+
+
 class STItem(AST):
     pass
 
