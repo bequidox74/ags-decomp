@@ -8,23 +8,29 @@ class StringWriter:
         self.buffer = []
         self.indent_string = indent
         self._current_indent = ""
-        self.level = 0
+        self._level = 0
+
+    @property
+    def level(self) -> int:
+        return self._level
+
+    @level.setter
+    def level(self, value: int) -> None:
+        self._level = max(0, value)
+        self._current_indent = self.indent_string * self._level
 
     def append(self, s: str) -> None:
         self.buffer.append(s)
 
-    def indent(self) -> None:
-        self.level += 1
-        self._current_indent = self.indent_string * self.level
+    def indent(self, levels: int = 1) -> None:
+        self.level += levels
 
     def dedent(self, levels: int = 1) -> None:
-        self.level = max(0, self.level - levels)
-        self._current_indent = self.indent_string * self.level
+        self.level -= levels
 
     # carriage return
     def cr(self) -> None:
         self.level = 0
-        self._current_indent = ""
 
     def print(self, s: str = "") -> None:
         if self._current_indent:

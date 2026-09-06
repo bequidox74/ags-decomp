@@ -158,7 +158,17 @@ class FixedUpValue(Parameter):
 class Label(Parameter):
     from_: int
     to: int
+    func_name: str
     count: int = 0
+
+    def as_param(self) -> str:
+        return f"L{self.to}_{self.func_name}"
+
+    def as_label(self) -> str:
+        return f"L{self.to}_{self.func_name}: ; {self.count} references"
+
+    def __str__(self) -> str:
+        return self.as_param()
 
 
 class Instruction(NamedTuple):
@@ -188,7 +198,7 @@ class Function(NamedTuple):
     name: str
     nargs: int
     offset: int
-    instructions: list[Instruction]
+    items: list[Instruction | Label]
 
 
 class Disassembly:
@@ -205,7 +215,6 @@ class Disassembly:
 
         self._read_scom()
         self._disassemble()
-        # self._insert_labels()
 
     def format(self, sw: StringWriter | None = None) -> str:
         if sw is None:
@@ -231,16 +240,22 @@ class Disassembly:
                 sw.println(f"{func.name}${func.nargs}: ; @{func.offset}")
                 sw.indent()
                 sw.indent()
-                for ins in func.instructions:
-                    is_linenum = ins.opcode == Opcode.LINENUM
-                    out = ins.opcode.mnemonic
-                    if is_linenum:
-                        sw.dedent()
-                    if ins.params:
-                        out += f" {sjoin(', ', ins.params)}"
-                    sw.println(out)
-                    if is_linenum:
-                        sw.indent()
+                for item in func.items:
+                    if isinstance(item, Label):
+                        old_level = sw.level
+                        sw.cr()
+                        sw.println(item.as_label())
+                        sw.level = old_level
+                    elif isinstance(item, Instruction):
+                        is_linenum = item.opcode == Opcode.LINENUM
+                        out = item.opcode.mnemonic
+                        if is_linenum:
+                            sw.dedent()
+                        if item.params:
+                            out += f" {sjoin(', ', item.params)}"
+                        sw.println(out)
+                        if is_linenum:
+                            sw.indent()
                 sw.dedent()
                 sw.dedent()
                 sw.println()
@@ -302,7 +317,7 @@ class Disassembly:
             self.gdata = br.read_bytes(self.gdata_size)
 
         for _ in range(self.code_size):
-            self.code.append(br.u32())
+            self.code.append(br.i32())
 
         self._indexed_strings: dict[int, str] = {}
         strings_start = br.tell()
@@ -376,20 +391,35 @@ class Disassembly:
         self._pc = start
         while self._pc < end:
             opcode = Opcode(self.code[self._pc])
-            instr = self._process_opcode(self._pc, opcode)
+            instr = self._process_opcode(self._pc, opcode, name)
             instructions.append(instr)
             self._pc += 1 + opcode.nargs
 
-        return Function(name, nargs, start, instructions)
+        items = self._insert_labels(instructions)
+        return Function(name, nargs, start, items)
 
-    def _process_opcode(self, offset: int, opcode: Opcode) -> Instruction:
+    def _insert_labels(
+        self, instructions: list[Instruction]
+    ) -> list[Instruction | Label]:
+        items: list[Instruction | Label] = []
+        pc = 0
+        for ins in instructions:
+            if pc in self.jumps:
+                items.append(self.jumps[pc])
+            items.append(ins)
+            pc += 1 + len(ins.params)
+        return items
+
+    def _process_opcode(
+        self, offset: int, opcode: Opcode, func_name: str
+    ) -> Instruction:
         match opcode:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
                 from_ = offset
-                to = self.code[offset + 1]
-                label = Label(from_, to)
+                to = offset + 2 + self.code[offset + 1]  # + 2 to skip our args
+                label = Label(from_, to, func_name)
                 self.jumps[to] = label
-                return Instruction(opcode, [FixedUpValue(to)])
+                return Instruction(opcode, [label])
             case _:
                 pass
 
