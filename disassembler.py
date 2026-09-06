@@ -140,7 +140,7 @@ class Register(Parameter, enum.Enum):
 @dataclass
 class FixedUpValue(Parameter):
     original: int
-    fixed: Primitive | None
+    fixed: Primitive | None = None
     type_: FixupType = FixupType.NO_FIXUP
 
     def __str__(self) -> str:
@@ -153,6 +153,13 @@ class FixedUpValue(Parameter):
                 return f"local@{self.original}"
             case _:
                 return str(self.original)
+
+
+@dataclass
+class Label(Parameter):
+    from_: int
+    to: int
+    count: int = 0
 
 
 class Instruction(NamedTuple):
@@ -192,11 +199,14 @@ class Disassembly:
         self.gdata: bytes = b""
         self.gdata_offset = 0
         self.scom_version: int = 90
-
         self.code: list[int] = []
-        self._read_scom()
+        self.jumps: dict[int, Label] = {}  # dict[dst, label]
 
+        self._pc = 0
+
+        self._read_scom()
         self._disassemble()
+        # self._insert_labels()
 
     def format(self, sw: StringWriter | None = None) -> str:
         if sw is None:
@@ -365,16 +375,24 @@ class Disassembly:
         nargs = int(parts[1])
         instructions: list[Instruction] = []
 
-        i = start
-        while i < end:
-            opcode = Opcode(self.code[i])
-            instr = self._process_opcode(i, opcode)
+        self._pc = start
+        while self._pc < end:
+            opcode = Opcode(self.code[self._pc])
+            instr = self._process_opcode(self._pc, opcode)
             instructions.append(instr)
-            i += 1 + opcode.nargs
+            self._pc += 1 + opcode.nargs
 
         return Function(name, nargs, start, instructions)
 
     def _process_opcode(self, offset: int, opcode: Opcode) -> Instruction:
+        match opcode:
+            case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
+                from_ = offset
+                to = self.code[offset + 1]
+                label = Label(from_, to)
+                self.jumps[to] = label
+                return Instruction(opcode, [FixedUpValue(to)])
+
         params: list[Parameter] = []
         for i, f in enumerate(opcode.args_format):
             idx = offset + i + 1
