@@ -9,21 +9,30 @@ from string_writer import StringWriter
 
 
 class BinOp(Enum):
-    ADD = "+"
-    SUB = "-"
-    MUL = "*"
-    DIV = "/"
-    MOD = "%"
-    BITAND = "&"
-    BITOR = "|"
-    EQ = "=="
-    NEQ = "!="
-    GTE = ">="
-    GT = ">"
-    LTE = "<="
-    LT = "<"
-    AND = "&&"
-    OR = "||"
+    MUL = ("*", 10)
+    DIV = ("/", 10)
+    MOD = ("%", 10)
+
+    ADD = ("+", 9)
+    SUB = ("-", 9)
+
+    GTE = (">=", 8)
+    GT = (">", 8)
+    LTE = ("<=", 8)
+    LT = ("<", 8)
+
+    EQ = ("==", 7)
+    NEQ = ("!=", 7)
+
+    BITAND = ("&", 6)
+    BITOR = ("|", 4)
+
+    AND = ("&&", 3)
+    OR = ("||", 2)
+
+    def __init__(self, symbol: str, precedence: int):
+        self.symbol = symbol
+        self.precedence = precedence
 
 
 class AST(ABC):
@@ -51,11 +60,46 @@ class STBinaryExpression(STExpression):
     operation: BinOp
 
     def emit(self, sw: StringWriter) -> None:
-        sw.append("(")
-        self.left.emit(sw)
-        sw.append(f" {self.operation.value} ")
-        self.right.emit(sw)
-        sw.append(")")
+        self._emit_child(sw, self.left, side="left")
+        sw.append(f" {self.operation.value[0]} ")
+        self._emit_child(sw, self.right, side="right")
+
+    def _emit_child(
+        self,
+        sw: StringWriter,
+        child: STExpression,
+        side: Literal["left", "right"],
+    ) -> None:
+        if not isinstance(child, STBinaryExpression):
+            child.emit(sw)
+            return
+
+        parent_op = self.operation
+        child_op = child.operation
+        needs_parens = self._needs_parens(
+            parent_op,
+            child_op,
+            side,
+        )
+        if needs_parens:
+            sw.append("(")
+        child.emit(sw)
+        if needs_parens:
+            sw.append(")")
+
+    @staticmethod
+    def _needs_parens(
+        parent: BinOp,
+        child: BinOp,
+        side: Literal["left", "right"],
+    ) -> bool:
+        if child.precedence < parent.precedence:
+            return True
+        if child.precedence > parent.precedence:
+            return False
+        if side == "right":
+            return True
+        return False
 
 
 class STItem(AST):
