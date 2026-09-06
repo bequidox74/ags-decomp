@@ -27,7 +27,7 @@ class StringWriter:
         self._current_indent = ""
 
     def print(self, s: str = "") -> None:
-        if self._current_indent and s:
+        if self._current_indent:
             self.buffer.append(self._current_indent)
         if s:
             self.buffer.append(s)

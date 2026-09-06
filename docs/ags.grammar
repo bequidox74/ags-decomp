@@ -1,0 +1,23 @@
+script = item*
+item = var_declaration ";"
+    | func_definition
+
+block = "{" statement* "}"
+statements = statement | block
+statement = (var_declaration
+    | assignment_stmt
+    | if_stmt) ";"
+literal = INT | FLOAT | STRING
+type = primitive_type
+primitive_type = "int" | "float" | "char" | "String" | "bool"
+
+var_declaration = type ID
+
+func_definition = (type | "function") ID "(" [func_params] ")" block
+func_params: func_param ("," func_param)*
+func_param: type ID
+
+assignment_stmt = assignment_target "=" expression
+assignment_target = var_declaration "[" "]"
+
+if_stmt = "if" "(" expression ")" statements ["else" statements]

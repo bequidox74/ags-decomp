@@ -1,59 +1,132 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from abc import ABC
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Literal, Sequence
 
-from disassembler import Primitive
 from string_writer import StringWriter
 
 
+class BinOp(Enum):
+    PLUS = "+"
+    MINUS = "-"
+    MUL = "*"
+    DIV = "/"
+    MOD = "%"
+
+
 class AST(ABC):
+    @abstractmethod
     def emit(self, sw: StringWriter) -> None:
-        raise NotImplementedError
+        pass
 
 
-@dataclass
-class STScript(AST):
-    funcs: list[STFunction]
-
-    def emit(self, sw: StringWriter) -> None:
-        for func in self.funcs:
-            func.emit(sw)
-            sw.println()
-
-
-@dataclass
-class STStatement(AST, ABC):
+class STExpression(AST):
     pass
 
 
 @dataclass
-class STLiteral(AST):
-    value: Primitive
+class STLiteral(STExpression):
+    value: int | float | str
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append(str(self.value))
+
+
+@dataclass
+class STBinaryExpression(STExpression):
+    left: STExpression
+    right: STExpression
+    operation: BinOp
+
+
+class STItem(AST):
+    pass
+
+
+@dataclass
+class STType(AST):  # wrapper for by-reference access
+    t: Literal["int", "char", "float", "bool", "String"]
+    guess: bool = True
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append(self.t)
+
+
+@dataclass
+class STScript(AST):
+    items: Sequence[STItem | STVarDeclaration]
+
+    def emit(self, sw: StringWriter) -> None:
+        for item in self.items:
+            item.emit(sw)
+
+
+class STStatement(AST):
+    pass
+
+
+class STAssignmentTarget(AST):
+    pass
+
+
+@dataclass
+class STVarAssignTarget(STAssignmentTarget):
+    name: str
+    array_index: STExpression | None
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append(f"{self.name}")
+        if self.array_index is not None:
+            sw.append("[")
+            self.array_index.emit(sw)
+            sw.append("]")
 
 
 @dataclass
 class STAssignment(STStatement):
-    lhs: str
-    rhs: str
+    lhs: STAssignmentTarget | STVarDeclaration
+    rhs: STExpression
 
     def emit(self, sw: StringWriter) -> None:
-        sw.print(f"{self.lhs} = {self.rhs}")
-        # self.rhs.emit(sw)
-        sw.append(";")
-        sw.println()
+        sw.print()
+        self.lhs.emit(sw)
+        sw.append(" = ")
+        self.rhs.emit(sw)
 
 
 @dataclass
-class STFunction(AST):
+class STVarDeclaration(STStatement):
+    type_: STType
     name: str
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print()
+        self.type_.emit(sw)
+        sw.append(f" {self.name}")
+
+
+@dataclass
+class STFunctionParam(AST):
+    type_: STType
+    id_: str
+
+
+@dataclass
+class STFunction(STItem):
+    type_: STType | Literal["function"]
+    name: str
+    parameters: list[STFunctionParam]
     statements: list[STStatement]
 
     def emit(self, sw: StringWriter) -> None:
         sw.println(f"function {self.name}() {{")
-        sw.indent()
+        # sw.indent()  # FIXME
         for stmt in self.statements:
             stmt.emit(sw)
-        sw.dedent()
+            sw.append(";")
+            sw.println()
+        # sw.dedent()
         sw.println("}")
         sw.println()
