@@ -2,11 +2,13 @@ import enum
 import warnings
 
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple, TypeAlias
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
 from utils import sjoin, quote, format_bindata
+
+Primitive: TypeAlias = int | str | float
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
@@ -131,11 +133,26 @@ class Register(Parameter, enum.Enum):
     OP = 6
     DX = 7
 
+    def __str__(self) -> str:
+        return self.name.lower()
+
 
 @dataclass
 class FixedUpValue(Parameter):
     original: int
+    fixed: Primitive | None
     type_: FixupType = FixupType.NO_FIXUP
+
+    def __str__(self) -> str:
+        match self.type_:
+            case FixupType.STRING:
+                return quote(str(self.fixed))
+            case FixupType.IMPORT:
+                return str(self.fixed)
+            case FixupType.GLOBAL_DATA:
+                return f"local@{self.original}"
+            case _:
+                return str(self.original)
 
 
 class Instruction(NamedTuple):
@@ -338,27 +355,49 @@ class Disassembly:
         return Function(name, nargs, start, instructions)
 
     def _process_opcode(self, offset: int, opcode: Opcode) -> Instruction:
-        params: list = []
+        params: list[Parameter] = []
         for i, f in enumerate(opcode.args_format):
             idx = offset + i + 1
             arg = self.code[idx]
             match f:
                 case "r":  # register
-                    params.append(Register(arg).name.lower())
+                    params.append(Register(arg))
                 case "a":  # argument, possible fixup
                     # is there a fixup for this index?
                     if idx in self.fixups:
+                        type_ = self.fixups[idx]
                         match self.fixups[idx]:
                             case FixupType.STRING:
-                                params.append(quote(self._indexed_strings[arg]))
-                            case FixupType.GLOBAL_DATA:
-                                params.append(f"@{arg}")
+                                params.append(
+                                    FixedUpValue(
+                                        arg,
+                                        self._indexed_strings[arg],
+                                        type_,
+                                    )
+                                )
                             case FixupType.IMPORT:
-                                params.append(self.imports[arg])
+                                params.append(
+                                    FixedUpValue(
+                                        arg,
+                                        self.imports[arg],
+                                        type_,
+                                    )
+                                )
                             case _:
-                                # we should be fine ignoring these; they're for the VM.
-                                params.append(arg)
+                                params.append(
+                                    FixedUpValue(
+                                        arg,
+                                        None,
+                                        type_,
+                                    )
+                                )
                     else:
-                        params.append(arg)  # append literal integer
+                        params.append(
+                            FixedUpValue(
+                                arg,
+                                None,
+                                FixupType.NO_FIXUP,
+                            )
+                        )
 
         return Instruction(opcode, params)
