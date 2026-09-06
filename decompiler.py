@@ -4,23 +4,42 @@ from enum import Enum, auto
 from disassembler import *
 from syntax_tree import *
 
+MemOffset: TypeAlias = int
+
+
+@dataclass
+class LocalVar:
+    size: int
+    id_: int
+    newly_created: bool = True
+    type_: STType | None = None
+
+    @property
+    def name(self) -> str:
+        return f"local{self.id_}"
+
+
+@dataclass
+class GlobalVar:
+    size: int
+    id_: int
+    type_: STType | None = None
+
+    @property
+    def name(self) -> str:
+        return f"global{self.id_}"
+
 
 class Decompiler:
     class WriteTarget(Enum):
         LOCAL = auto()
         GLOBAL = auto()
 
-    @dataclass
-    class LocalVar:
-        size: int
-        id_: int
-        newly_created: bool = True
-        type_: STType | None = None
+    WT = WriteTarget
 
     def __init__(self, dis: Disassembly) -> None:
         self.dis = dis
-        self.funcs: list[STFunction] = []
-        self.ast: AST
+        self.stfuncs: list[STFunction] = []
 
         self.gdata = bytearray(self.dis.gdata)
         self.registers: dict[Register, Any] = {
@@ -37,6 +56,7 @@ class Decompiler:
         self.thisbase = 0
 
         self._decompile()
+        self._build_script()
 
     @property
     def sp(self) -> int:
@@ -45,110 +65,114 @@ class Decompiler:
         return v
 
     @sp.setter
-    def sp(self, sp: int) -> None:
-        self.registers[Register.SP] = sp
+    def sp(self, v: int) -> None:
+        self.registers[Register.SP] = v
 
     @property
-    def op(self) -> Any:
-        return self.registers[Register.OP]
+    def mar(self) -> int:
+        v = self.registers[Register.MAR]
+        assert isinstance(v, int)
+        return v
 
-    @property
-    def ax(self) -> Any:
-        return self.registers[Register.AX]
-
-    @property
-    def bx(self) -> Any:
-        return self.registers[Register.BX]
-
-    @property
-    def cx(self) -> Any:
-        return self.registers[Register.CX]
-
-    @property
-    def dx(self) -> Any:
-        return self.registers[Register.DX]
-
-    @property
-    def mar(self) -> Any:
-        return self.registers[Register.MAR]
+    @mar.setter
+    def mar(self, v: int) -> None:
+        self.registers[Register.MAR] = v
 
     def _next_local_id(self) -> int:
         result = self.local_id
         self.local_id += 1
         return result
 
+    def _next_global_id(self) -> int:
+        result = self.global_id
+        self.global_id += 1
+        return result
+
     def _decompile(self) -> None:
-        funcs: list[STFunction] = []
-        self.ast = STScript(funcs)
         self.write_target: Decompiler.WriteTarget | None = None
-        self.local_id = 0
+        self.global_id = 0
+        self.globals: dict[MemOffset, GlobalVar] = {}
 
         for func in self.dis.functions:
-            self.locals: dict[int, Decompiler.LocalVar] = {}
-            self.func = STFunction("function", func.name, [], [])
-            for ins in func.instructions:
-                match ins.opcode:
-                    case Opcode.LINENUM:
-                        self.linenum = ins.params[0]
+            self._dc_func(func)
+            self.stfuncs.append(self.stfunc)
 
-                    case Opcode.THISBASE:
-                        self.thisbase = ins.params[0]
+    def _build_script(self) -> None:
+        items: list[STItem] = []
 
-                    case Opcode.REGTOREG:
-                        assert isinstance(ins.params[0], Register)
-                        assert isinstance(ins.params[1], Register)
-                        src = ins.params[0]
-                        dst = ins.params[1]
-                        self.registers[dst] = self.registers[src]
+        for gvar in self.globals.values():
+            assert gvar.type_ is not None
+            decl = STVarDeclaration(gvar.type_, gvar.name)
+            items.append(decl)
 
-                        if src == Register.SP and dst == Register.MAR:
-                            # prepare write to local
-                            self.write_target = Decompiler.WriteTarget.LOCAL
+        items.extend(self.stfuncs)  # add decompiled functions
+        self.script = STScript(items)
 
-                    case Opcode.LITTOREG:
-                        reg = ins.params[0]
-                        val = ins.params[1]
-                        assert isinstance(reg, Register)
-                        assert isinstance(val, FixedUpValue)
-                        self.registers[reg] = self._fixup(val)
+    def _dc_func(self, func: Function) -> None:
+        self.sp = 0  # new stack frame; reset SP
+        self.local_id = 0
+        self.locals: dict[MemOffset, LocalVar] = {}
+        self.stfunc = STFunction("function", func.name, [], [])
+        for ins in func.instructions:
+            self._dc_ins(ins)
 
-                        if reg == Register.MAR:
-                            match val.type_:
-                                case FixupType.GLOBAL_DATA | FixupType.IMPORT:
-                                    # prepare write to global
-                                    self.write_target = Decompiler.WriteTarget.GLOBAL
+    def _dc_ins(self, ins: Instruction) -> None:
+        match ins.opcode:
+            case Opcode.LINENUM:
+                self.linenum = ins.get_int(0)
 
-                    case Opcode.ZEROMEMORY | Opcode.MEMWRITE:
-                        self._handle_memwrite(ins)
+            case Opcode.THISBASE:
+                self.thisbase = ins.get_int(0)
 
-                    case Opcode.ADD:
-                        reg = ins.params[0]
-                        val = ins.params[1]
-                        assert isinstance(reg, Register)
-                        assert isinstance(val, FixedUpValue)
+            case Opcode.REGTOREG:
+                src = ins.get_reg(0)
+                dst = ins.get_reg(1)
+                self.registers[dst] = self.registers[src]
 
-                        val = self._fixup(val)
-                        if reg == Register.SP:
-                            # simply move the SP
-                            self.registers[reg] += val
-                        else:
-                            # need to construct an expression
-                            raise NotImplementedError
+                if src == Register.SP and dst == Register.MAR:
+                    # prepare write to local
+                    self.write_target = self.WriteTarget.LOCAL
 
-                    case Opcode.LOADSPOFFS:
-                        val = ins.params[0]
-                        assert isinstance(val, FixedUpValue)
-                        val = self._fixup(val)
-                        assert isinstance(val, int)
-                        self.sp -= val
+            case Opcode.LITTOREG:
+                reg = ins.get_reg(0)
+                val = ins.get_fup(1)
+                self.registers[reg] = self._fixup(val)
 
-                    case Opcode.RET:
-                        pass  # TODO!
+                if reg != Register.MAR:
+                    return
+                match val.type_:
+                    case FixupType.GLOBAL_DATA | FixupType.IMPORT:
+                        # prepare write to global
+                        self.write_target = self.WriteTarget.GLOBAL
 
-                    case _:
-                        raise NotImplementedError
+            case Opcode.ZEROMEMORY | Opcode.MEMWRITE:
+                self._handle_memwrite(ins)
 
-            funcs.append(self.func)
+            case Opcode.ADD | Opcode.SUB:
+                reg = ins.get_reg(0)
+                val = self._fixup(ins.get_fup(1))
+                if reg == Register.SP:
+                    # simply move the SP
+                    if ins.opcode == Opcode.ADD:
+                        self.registers[reg] += val
+                    elif ins.opcode == Opcode.SUB:
+                        self.registers[reg] -= val
+                    else:
+                        raise RuntimeError
+                else:
+                    # need to construct an expression
+                    raise NotImplementedError
+
+            case Opcode.LOADSPOFFS:
+                val = self._fixup(ins.get_fup(0))
+                assert isinstance(val, int)
+                self.mar = self.sp - val
+
+            case Opcode.RET:
+                pass  # TODO!
+
+            case _:
+                raise NotImplementedError
 
     def _fixup(self, v: FixedUpValue) -> Primitive:
         match v.type_:
@@ -164,45 +188,61 @@ class Decompiler:
         # any write to memory emits an assignment
         match ins.opcode:
             case Opcode.ZEROMEMORY:  # zeromem
-                assert self.write_target != Decompiler.WriteTarget.GLOBAL
-                # variable is simply declared
-                size = ins.params[0]
-                assert isinstance(size, FixedUpValue)
-                size = self._fixup(size)
-                assert isinstance(size, int)
-
-                lvar = self._lookup_local(self.sp, size)
-
-                # determine appropriate type -- TODO!
-                if size == 4:
-                    lvar.type_ = STType("int")
-                else:
-                    raise NotImplementedError
-
-                stmt = STVarDeclaration(lvar.type_, f"local{lvar.id_}")
-                self.func.statements.append(stmt)
+                self._write_zeros(ins)
             case Opcode.MEMWRITE:  # memwrite4
-                # writing int/float/pointer, assume int initially.
-                # current SP tells us what variable is being written.
-                reg = ins.params[0]
-                assert isinstance(reg, Register)
-                lvar = self._lookup_local(self.sp, 4)
+                self._write4b(ins)
 
-                expr = self._make_expr(reg)
+    def _write_zeros(self, ins: Instruction) -> None:
+        # global vars are not initialized at runtime
+        assert self.write_target != self.WriteTarget.GLOBAL
+        # variable is simply declared
+        size = ins.params[0]
+        assert isinstance(size, FixedUpValue)
+        size = self._fixup(size)
+        assert isinstance(size, int)
 
-                if lvar.newly_created:
-                    # if we have not written into this variable before,
-                    # it must be a variable definition.
-                    lvar.type_ = STType("int")
-                    name = f"local{lvar.id_}"
-                    lhs = STVarDeclaration(lvar.type_, name)
-                else:
-                    # if we have written into it before, then it's a
-                    # simple assignment.
-                    name = f"local{lvar.id_}"
-                    lhs = STVarAssignTarget(name, None)
-                stmt = STAssignment(lhs, expr)
-                self.func.statements.append(stmt)
+        lvar = self._get_local(self.sp, size)
+
+        # determine appropriate type -- TODO!
+        if size == 4:
+            lvar.type_ = STType("int")
+        else:
+            raise NotImplementedError
+
+        stmt = STVarDeclaration(lvar.type_, f"local{lvar.id_}")
+        self.stfunc.statements.append(stmt)
+
+    def _write4b(self, ins: Instruction) -> None:
+        # writing int/float/pointer, assume int initially.
+        # current SP tells us what variable is being written.
+        reg = ins.get_reg(0)
+        expr = self._make_expr(reg)
+
+        match self.write_target:
+            case self.WT.LOCAL:
+                self._emit_local_4b(expr)
+            case self.WT.GLOBAL:
+                self._emit_global_4b(expr)
+
+    def _emit_local_4b(self, expr: STExpression) -> None:
+        lvar = self._get_local(self.sp, 4)
+        if lvar.newly_created:
+            # newly created, need to define
+            lvar.type_ = STType("int")
+            lhs = STVarDeclaration(lvar.type_, lvar.name)
+        else:
+            # existing variable, simply assign
+            lhs = STVarAssignTarget(lvar.name, None)
+            pass
+        stmt = STAssignment(lhs, expr)
+        self.stfunc.statements.append(stmt)
+
+    def _emit_global_4b(self, expr: STExpression) -> None:
+        gvar = self._get_global(self.mar, 4)
+        gvar.type_ = STType("int")
+        lhs = STVarAssignTarget(gvar.name, None)
+        stmt = STAssignment(lhs, expr)
+        self.stfunc.statements.append(stmt)
 
     def _make_expr(self, reg: Register) -> STExpression:
         rv = self.registers[reg]
@@ -213,15 +253,27 @@ class Decompiler:
         else:
             raise NotImplementedError
 
-    def _lookup_local(self, sp: int, size: int) -> Decompiler.LocalVar:
+    def _get_local(self, sp: int, size: int) -> LocalVar:
+        lvar: LocalVar
         if sp not in self.locals:
             # new variable, set newly_created
-            lvar = Decompiler.LocalVar(size, self._next_local_id(), True)
+            lvar = LocalVar(size, self._next_local_id(), True)
             self.locals[sp] = lvar
         else:
             # old variable, clear newly_created
             lvar = self.locals[sp]
             lvar.newly_created = False
 
-        assert self.locals[sp].size == size
-        return self.locals[sp]
+        assert lvar.size == size
+        return lvar
+
+    def _get_global(self, mar: int, size: int) -> GlobalVar:
+        gvar: GlobalVar
+        if mar not in self.globals:
+            gvar = GlobalVar(size, self._next_global_id())
+            self.globals[mar] = gvar
+        else:
+            gvar = self.globals[mar]
+            assert gvar.size == size
+
+        return gvar

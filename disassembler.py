@@ -159,6 +159,24 @@ class Instruction(NamedTuple):
     opcode: Opcode
     params: list[Parameter]
 
+    def get_reg(self, idx: int) -> Register:
+        reg = self.params[idx]
+        assert isinstance(reg, Register)
+        return reg
+
+    def get_int(self, idx: int) -> int:
+        val = self.params[idx]
+        assert isinstance(val, FixedUpValue)
+        assert val.type_ == FixupType.NO_FIXUP
+        return val.original
+
+    def get_fup(self, idx: int, type_: FixupType | None = None) -> FixedUpValue:
+        fup = self.params[idx]
+        assert isinstance(fup, FixedUpValue)
+        if type_ is not None:
+            assert fup.type_ == type_
+        return fup
+
 
 class Function(NamedTuple):
     name: str

@@ -97,7 +97,7 @@ class STAssignment(STStatement):
 
 
 @dataclass
-class STVarDeclaration(STStatement):
+class STVarDeclaration(STStatement, STItem):
     type_: STType
     name: str
 
