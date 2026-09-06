@@ -190,7 +190,7 @@ class Disassembly:
         self.source = source
         self.functions: list[Function] = []
         self.gdata: bytes = b""
-        self.scomVersion: int = 90
+        self.scom_version: int = 90
 
         self.code: list[int] = []
         self._read_scom()
@@ -201,7 +201,7 @@ class Disassembly:
         if sw is None:
             sw = StringWriter()
 
-        sw.println(f"; AGS SCOM version {self.scomVersion}")
+        sw.println(f"; AGS SCOM version {self.scom_version}")
 
         # printing bytes isn't very elegant, but it's the only way to be sure
         # it's correct, at least until a proper analyzer is implemented.
@@ -281,8 +281,8 @@ class Disassembly:
         br = BinaryReader(self.source)
 
         assert br.read_fixed_string(4) == "SCOM", "Source is not a compiled AGS script"
-        self.scomVersion = br.u32()
-        assert self.scomVersion == 90, "Unsupported SCOM version"
+        self.scom_version = br.u32()
+        assert self.scom_version == 90, "Unsupported SCOM version"
 
         self.gdata_size = br.u32()
         self.code_size = br.u32()
