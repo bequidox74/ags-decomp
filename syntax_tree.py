@@ -121,6 +121,7 @@ class STItem(AST):
 @dataclass
 class STType(AST):  # wrapper for by-reference access
     t: Literal["int", "char", "short", "float", "bool", "String"]
+    array_size: int | None = None
     guess: bool = True
 
     def emit(self, sw: StringWriter) -> None:
@@ -182,7 +183,12 @@ class STVarDeclaration(STStatement, STItem):
     def emit(self, sw: StringWriter) -> None:
         sw.print()
         self.type_.emit(sw)
-        sw.append(f" {self.name};")
+        sw.append(f" {self.name}")
+        if self.type_.array_size is not None:
+            sw.append("[")
+            sw.append(str(self.type_.array_size))
+            sw.append("]")
+        sw.append(";")
 
 
 @dataclass
@@ -199,11 +205,10 @@ class STFunction(STItem):
     statements: list[STStatement]
 
     def emit(self, sw: StringWriter) -> None:
-        sw.println(f"function {self.name}() {{")
+        sw.println(f"function {self.name}(/* TODO */) {{")
         sw.indent()
         for stmt in self.statements:
             stmt.emit(sw)
             sw.println()
         sw.dedent()
         sw.println("}")
-        sw.println()
