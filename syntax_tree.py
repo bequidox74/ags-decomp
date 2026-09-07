@@ -122,7 +122,7 @@ class STItem(AST):
 class STType(AST):  # wrapper for by-reference access
     t: Literal["int", "char", "short", "float", "bool", "String"]
     array_size: int | None = None
-    guess: bool = True
+    is_guess: bool = True
 
     def emit(self, sw: StringWriter) -> None:
         sw.append(self.t)
