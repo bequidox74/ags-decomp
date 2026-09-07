@@ -12,7 +12,7 @@ MemOffset: TypeAlias = int
 class _LocalVar:
     size: int
     id_: int
-    newly_created: bool = True
+    is_newly_created: bool = True
     declaration: STVarDeclaration | None = None
 
     @property
@@ -89,7 +89,7 @@ class Decompiler:
         self._svars: dict[MemOffset, _ScriptVar] = {}
 
         self._sp: int = 0
-        self._mar = 0
+        self._mar: int | FixedUpValue | STBinaryExpression = 0
         self._op = 0
         self._ax = 0
         self._bx = 0
@@ -174,6 +174,7 @@ class Decompiler:
                 elif opc == Opcode.LOADSPOFFS:
                     offset = item.as_int(0)
                     self._mar = self._sp - offset
+                    assert self._mar >= 0
                     self._write_target = "local"  # writing to stack, so must be a local
                 elif opc == Opcode.ZEROMEMORY:
                     size = item.as_int(0)
@@ -189,8 +190,19 @@ class Decompiler:
                     assert r == Register.AX  # i'm not sure if this is always the case
                     v = item.as_int(1)
                     self._array_item_count = v
+                elif opc == Opcode.MEMREADB:
+                    r = item.as_reg(0)
+                    self._emit_varexpr(1, r)
+                elif opc == Opcode.MEMREADW:
+                    r = item.as_reg(0)
+                    self._emit_varexpr(2, r)
+                elif opc == Opcode.MEMREAD:
+                    r = item.as_reg(0)
+                    self._emit_varexpr(4, r)
                 elif opc == Opcode.RET:
                     pass  # TODO: return values
+                else:
+                    raise NotImplementedError(opc)
 
             stfunc = STFunction("function", func.name, [], self._statements)
             self._stfuncs.append(stfunc)
@@ -205,7 +217,7 @@ class Decompiler:
         assert isinstance(self._mar, int), "MAR has non-int before declaring local"
 
         lvar = self._get_local(self._mar, size)
-        assert lvar.newly_created, "Declaring an existing local"
+        assert lvar.is_newly_created, "Declaring an existing local"
         type_ = self._guess_type_from_size(size)
         stmt = STVarDeclaration(type_, lvar.name)
         lvar.declaration = stmt
@@ -216,36 +228,24 @@ class Decompiler:
         target: STAssignmentTarget
         match self._write_target:
             case "local":
+                assert isinstance(self._mar, int)
                 lvar = self._get_local(self._mar, size)
-                target = STVarAssignTarget(lvar.name, None)
+                type_ = None
+                if lvar.is_newly_created:
+                    type_ = self._guess_type_from_size(lvar.size)
+                else:
+                    # the variable must already be declared
+                    assert lvar.declaration is not None
+                target = STVarAssignTarget(lvar.name, None, type_)
             case "global":
                 assert isinstance(self._mar, FixedUpValue)
                 assert self._mar.type_ == FixupType.IMPORT, "MAR is not an import"
                 name = self._mar.fixed
                 assert isinstance(name, str)
-                type_ = self._guess_type_from_size(size)
-                target = STVarAssignTarget(name, None, type_)
+                target = STVarAssignTarget(name, None, None)
             case "array":
                 # arrays will have MAR = (variable + CX(AX(index) * size))
-                expr = self._mar
-                assert isinstance(expr, STBinaryExpression)
-                assert expr.operation == BinOp.ADD
-
-                var = expr.left
-                assert isinstance(var, STLiteral)
-                var = var.value
-                assert isinstance(var, int | FixedUpValue)
-
-                mul = expr.right
-                assert isinstance(mul, STBinaryExpression)
-                assert mul.operation == BinOp.MUL
-
-                index = mul.left  # index should be an arbitrary expression
-                assert isinstance(index, STExpression)
-                item_size = mul.right  # item_size should be a literal int
-                assert isinstance(item_size, STLiteral)
-                item_size = item_size.value
-                assert isinstance(item_size, int)
+                var, index, item_size = self._array_from_mar()
 
                 if isinstance(var, int):
                     lvar = self._get_local(var, size)
@@ -274,6 +274,35 @@ class Decompiler:
 
         stmt = STAssignment(target, v)  # pyright: ignore[reportPossiblyUnboundVariable]
         self._statements.append(stmt)
+
+    def _emit_varexpr(self, size: int, r: Register) -> None:
+        if isinstance(self._mar, int):
+            lvar = self._get_local(self._mar, size)
+            self._setr(r, STVarExpression(lvar.name, None))
+        elif isinstance(self._mar, FixedUpValue):
+            t = self._mar.type_
+            if t == FixupType.GLOBAL_DATA:
+                svar = self._get_svar(self._mar.original, size)
+                self._setr(r, STVarExpression(svar.name, None))
+            elif t == FixupType.IMPORT:
+                assert isinstance(self._mar.fixed, str)
+                self._setr(r, STVarExpression(self._mar.fixed, None))
+        elif isinstance(self._mar, STBinaryExpression):
+            # array access
+            var, index, item_size = self._array_from_mar()
+            if isinstance(var, int):
+                lvar = self._get_local(var, item_size)
+                # must not access non-existent locals
+                assert not lvar.is_newly_created
+                self._setr(r, STVarExpression(lvar.name, index))
+            elif var.type_ == FixupType.GLOBAL_DATA:
+                svar = self._get_svar(var.original, item_size)
+                self._setr(r, STVarExpression(svar.name, index))
+            elif var.type_ == FixupType.IMPORT:
+                assert isinstance(var.fixed, str)
+                self._setr(r, STVarExpression(var.fixed, index))
+            else:
+                raise NotImplementedError(var.type_)
 
     def _build_script(self) -> None:
         items: list[STItem] = []
@@ -310,6 +339,7 @@ class Decompiler:
                 assert isinstance(value, int), "SP has a non-int value"
                 self._sp = value
             case Register.MAR:
+                assert isinstance(value, int | FixedUpValue | STBinaryExpression)
                 self._mar = value
             case Register.OP:
                 self._op = value
@@ -356,7 +386,7 @@ class Decompiler:
             lvar = self._locals[offset]
             # if we're accessing the same local again, it is no longer
             # "newly created", for obvious reasons.
-            lvar.newly_created = False
+            lvar.is_newly_created = False
             return lvar
         else:
             lvar = _LocalVar(size, self._next_id(self._COUNTER_LOCAL))
@@ -365,9 +395,34 @@ class Decompiler:
 
     def _get_svar(self, offset: int, size: int) -> _ScriptVar:
         if offset in self._svars:
-            return self._svars[offset]
+            svar = self._svars[offset]
+            assert svar.size == size
+            return svar
         else:
             type_ = self._guess_type_from_size(size)
             svar = _ScriptVar(size, self._next_id(self._COUNTER_SCRVAR), type_)
             self._svars[offset] = svar
             return svar
+
+    def _array_from_mar(self) -> tuple[int | FixedUpValue, STExpression, int]:
+        expr = self._mar
+        assert isinstance(expr, STBinaryExpression)
+        assert expr.operation == BinOp.ADD
+
+        var = expr.left
+        assert isinstance(var, STLiteral)
+        var = var.value
+        assert isinstance(var, int | FixedUpValue)
+
+        mul = expr.right
+        assert isinstance(mul, STBinaryExpression)
+        assert mul.operation == BinOp.MUL
+
+        index = mul.left  # index should be an arbitrary expression
+        assert isinstance(index, STExpression)
+        item_size = mul.right  # item_size should be a literal int
+        assert isinstance(item_size, STLiteral)
+        item_size = item_size.value
+        assert isinstance(item_size, int)
+
+        return var, index, item_size
