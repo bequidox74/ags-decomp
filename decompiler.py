@@ -13,7 +13,7 @@ class _LocalVar:
     size: int
     id_: int
     newly_created: bool = True
-    type_: STType | None = None
+    declaration: STVarDeclaration | None = None
 
     @property
     def name(self) -> str:
@@ -79,7 +79,6 @@ class Decompiler:
         self._linenum = 0
         self._thisbase = 0
         self._write_target: Literal["global", "local", "script", "array"] = "global"  # noqa: UP037
-        self._array_item_size = 0
         self._array_item_count = 0
         self._counters: dict[str, int] = {}
 
@@ -205,10 +204,11 @@ class Decompiler:
         # of SP, which is guaranteed to be in int.
         assert isinstance(self._mar, int), "MAR has non-int before declaring local"
 
-        local = self._get_local(self._mar, size)
-        assert local.newly_created, "Declaring an existing local"
+        lvar = self._get_local(self._mar, size)
+        assert lvar.newly_created, "Declaring an existing local"
         type_ = self._guess_type_from_size(size)
-        stmt = STVarDeclaration(type_, local.name)
+        stmt = STVarDeclaration(type_, lvar.name)
+        lvar.declaration = stmt
         self._statements.append(stmt)
 
     def _emit_assign(self, inst: Instruction, size: int) -> None:
@@ -249,7 +249,11 @@ class Decompiler:
 
                 if isinstance(var, int):
                     lvar = self._get_local(var, size)
-                    target = STVarAssignTarget(lvar.name, index, lvar.type_)
+                    assert lvar.declaration is not None
+                    type_ = self._guess_type_from_size(item_size)
+                    type_.array_size = self._array_item_count
+                    lvar.declaration.type_ = type_
+                    target = STVarAssignTarget(lvar.name, index)
                 elif var.type_ == FixupType.GLOBAL_DATA:
                     svar = self._get_svar(var.original, size)
                     target = STVarAssignTarget(svar.name, index, svar.type_)
