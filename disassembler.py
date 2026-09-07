@@ -417,7 +417,8 @@ class Disassembly:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
                 from_ = offset
                 to = offset + 2 + self.code[offset + 1]  # + 2 to skip our args
-                label = Label(from_, to, func_name)
+                label = self.jumps.get(to, Label(from_, to, func_name))
+                label.count += 1
                 self.jumps[to] = label
                 return Instruction(opcode, [label])
             case _:
