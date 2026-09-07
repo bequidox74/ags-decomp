@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 import itertools
 from dataclasses import dataclass
@@ -174,6 +176,7 @@ class Label(Parameter):
 class Instruction(NamedTuple):
     opcode: Opcode
     params: list[Parameter]
+    offset: int
 
     def as_reg(self, idx: int) -> Register:
         reg = self.params[idx]
@@ -198,7 +201,7 @@ class Function(NamedTuple):
     name: str
     nargs: int
     offset: int
-    items: list[Instruction | Label]
+    items: list[Instruction]
 
 
 class Disassembly:
@@ -237,25 +240,27 @@ class Disassembly:
             sw.cr()
             sw.println(f".code[{self.code_size}]")
             for func in self.functions:
+                pc = 0
                 sw.println(f"{func.name}${func.nargs}: ; @{func.offset}")
                 sw.indent()
                 sw.indent()
                 for item in func.items:
-                    if isinstance(item, Label):
+                    if pc in self.jumps:
                         old_level = sw.level
                         sw.cr()
-                        sw.println(item.as_label())
+                        sw.println(self.jumps[pc].as_label())
                         sw.level = old_level
-                    elif isinstance(item, Instruction):
-                        is_linenum = item.opcode == Opcode.LINENUM
-                        out = item.opcode.mnemonic
-                        if is_linenum:
-                            sw.dedent()
-                        if item.params:
-                            out += f" {sjoin(', ', item.params)}"
-                        sw.println(out)
-                        if is_linenum:
-                            sw.indent()
+
+                    is_linenum = item.opcode == Opcode.LINENUM
+                    out = item.opcode.mnemonic
+                    if is_linenum:
+                        sw.dedent()
+                    if item.params:
+                        out += f" {sjoin(', ', item.params)}"
+                    sw.println(out)
+                    if is_linenum:
+                        sw.indent()
+                    pc += 1 + len(item.params)
                 sw.dedent()
                 sw.dedent()
                 sw.println()
@@ -395,20 +400,7 @@ class Disassembly:
             instructions.append(instr)
             self._pc += 1 + opcode.nargs
 
-        items = self._insert_labels(instructions)
-        return Function(name, nargs, start, items)
-
-    def _insert_labels(
-        self, instructions: list[Instruction]
-    ) -> list[Instruction | Label]:
-        items: list[Instruction | Label] = []
-        pc = 0
-        for ins in instructions:
-            if pc in self.jumps:
-                items.append(self.jumps[pc])
-            items.append(ins)
-            pc += 1 + len(ins.params)
-        return items
+        return Function(name, nargs, start, instructions)
 
     def _process_opcode(
         self, offset: int, opcode: Opcode, func_name: str
@@ -420,7 +412,8 @@ class Disassembly:
                 label = self.jumps.get(to, Label(from_, to, func_name))
                 label.count += 1
                 self.jumps[to] = label
-                return Instruction(opcode, [label])
+                inst = Instruction(opcode, [label], offset)
+                return inst
             case _:
                 pass
 
@@ -469,4 +462,4 @@ class Disassembly:
                             )
                         )
 
-        return Instruction(opcode, params)
+        return Instruction(opcode, params, offset)
