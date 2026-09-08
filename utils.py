@@ -1,5 +1,8 @@
 from collections.abc import Iterable
 from itertools import batched
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
 def sjoin(joiner: str, it: Iterable):
@@ -27,8 +30,8 @@ def strip_lines(s: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def at(l: list, i: int):
-    if i < 0 or i > len(l):
-        return None
-    else:
+def at(l: list[T], i: int) -> T | None:
+    if 0 < i < len(l):
         return l[i]
+    else:
+        return None

@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from disassembler import *
 from syntax_tree import *
+from utils import at
 
 MemOffset: TypeAlias = int
 
@@ -66,6 +67,16 @@ class Decompiler:
         Opcode.FSUB: BinOp.SUB,
     }
 
+    _BRANCH: ClassVar = {
+        Opcode.JMP,
+        Opcode.JZ,
+        Opcode.JNZ,
+    }
+
+    _TERMINATORS: ClassVar = {
+        Opcode.RET,
+    } | _BRANCH
+
     _COUNTER_LOCAL: ClassVar = "local"
     _COUNTER_SCRVAR: ClassVar = "script"
     _COUNTER_GLOBAL: ClassVar = "global"
@@ -96,8 +107,48 @@ class Decompiler:
         self._cx = 0
         self._dx = 0
 
+        self._build_cfg()
         self._decompile()
         self._build_script()
+
+    def _build_cfg(self) -> None:
+        """Builds a control flow graph for the script."""
+        for func in self.dis.functions:
+            leaders = self._find_leaders(func)
+            blocks = self._build_blocks(func.instructions, leaders)
+        # all our entry points are given as function names in the exports table.
+
+    def _find_leaders(self, func: Function) -> set[Instruction]:
+        """Finds code flow block leaders in the given function."""
+        leaders: set[Instruction] = set()
+        if not func.instructions:
+            return leaders
+        leaders.add(func.instructions[0])  # the first instruction is a leader
+        for i, inst in enumerate(func.instructions):
+            if inst.opcode in self._BRANCH:
+                target = inst.params[0]
+                assert isinstance(target, Label)
+                leaders.add(func.lookup[target.to])
+            if inst.opcode in self._TERMINATORS:
+                next_ = at(func.instructions, i + 1)
+                if next_:
+                    leaders.add(next_)
+        return leaders
+
+    def _build_blocks(
+        self, instructions: list[Instruction], leaders: set[Instruction]
+    ) -> dict[int, list[Instruction]]:
+        """Builds blocks from the given instruction list and control flow leaders."""
+        blocks: list[list[Instruction]] = []
+        current: list[Instruction] = []
+        for inst in instructions:
+            if inst in leaders and current:
+                blocks.append(current)
+                current = []
+            current.append(inst)
+        if current:
+            blocks.append(current)
+        return {b[0].offset: b for b in blocks}
 
     def _decompile(self) -> None:
         for func in self.dis.functions:
@@ -106,7 +157,7 @@ class Decompiler:
             self._locals = {}
             self._statements = []
 
-            for item in func.items:
+            for item in func.instructions:
                 if isinstance(item, Label):
                     self._labels.append(item)
                     continue

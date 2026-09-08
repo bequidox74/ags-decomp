@@ -177,6 +177,7 @@ class Instruction(NamedTuple):
     opcode: Opcode
     params: list[Parameter]
     offset: int
+    idx: int
 
     def as_reg(self, idx: int) -> Register:
         reg = self.params[idx]
@@ -196,12 +197,16 @@ class Instruction(NamedTuple):
             assert fup.type_ == type_
         return fup
 
+    def __hash__(self) -> int:
+        return hash(self.offset)
+
 
 class Function(NamedTuple):
     name: str
     nargs: int
     offset: int
-    items: list[Instruction]
+    instructions: list[Instruction]
+    lookup: dict[int, Instruction]
 
 
 class Disassembly:
@@ -244,7 +249,7 @@ class Disassembly:
                 sw.println(f"{func.name}${func.nargs}: ; @{func.offset}")
                 sw.indent()
                 sw.indent()
-                for item in func.items:
+                for item in func.instructions:
                     if pc in self.jumps:
                         old_level = sw.level
                         sw.cr()
@@ -392,18 +397,22 @@ class Disassembly:
         name = parts[0]
         nargs = int(parts[1])
         instructions: list[Instruction] = []
+        lookup: dict[int, Instruction] = {}
 
         self._pc = start
+        idx = 0
         while self._pc < end:
             opcode = Opcode(self.code[self._pc])
-            instr = self._process_opcode(self._pc, opcode, name)
+            instr = self._process_opcode(idx, self._pc, opcode, name)
             instructions.append(instr)
+            lookup[self._pc] = instr
             self._pc += 1 + opcode.nargs
+            idx += 1
 
-        return Function(name, nargs, start, instructions)
+        return Function(name, nargs, start, instructions, lookup)
 
     def _process_opcode(
-        self, offset: int, opcode: Opcode, func_name: str
+        self, idx: int, offset: int, opcode: Opcode, func_name: str
     ) -> Instruction:
         match opcode:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
@@ -412,23 +421,23 @@ class Disassembly:
                 label = self.jumps.get(to, Label(from_, to, func_name))
                 label.count += 1
                 self.jumps[to] = label
-                inst = Instruction(opcode, [label], offset)
+                inst = Instruction(opcode, [label], offset, idx)
                 return inst
             case _:
                 pass
 
         params: list[Parameter] = []
         for i, f in enumerate(opcode.args_format):
-            idx = offset + i + 1
-            arg = self.code[idx]
+            arg_idx = offset + i + 1
+            arg = self.code[arg_idx]
             match f:
                 case "r":  # register
                     params.append(Register(arg))
                 case "a":  # argument, possible fixup
                     # is there a fixup for this index?
-                    if idx in self.fixups:
-                        type_ = self.fixups[idx]
-                        match self.fixups[idx]:
+                    if arg_idx in self.fixups:
+                        type_ = self.fixups[arg_idx]
+                        match self.fixups[arg_idx]:
                             case FixupType.STRING:
                                 params.append(
                                     FixedUpValue(
@@ -462,4 +471,4 @@ class Disassembly:
                             )
                         )
 
-        return Instruction(opcode, params, offset)
+        return Instruction(opcode, params, offset, idx)
