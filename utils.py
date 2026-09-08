@@ -28,10 +28,3 @@ def strip_lines(s: str) -> str:
     for line in s.splitlines():
         lines.append(line.rstrip())
     return "\n".join(lines).strip() + "\n"
-
-
-def at(l: list[T], i: int) -> T | None:
-    if 0 < i < len(l):
-        return l[i]
-    else:
-        return None

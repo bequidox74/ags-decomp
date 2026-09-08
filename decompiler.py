@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from dataclasses import field
+from typing import ClassVar, Self
 
 from disassembler import *
 from syntax_tree import *
-from utils import at
 
-MemOffset: TypeAlias = int
+type _MemOffset = int
+type _InstructionList = list[Instruction]
+type _Leaders = set[Instruction]
+type _Address = int
+type _CodeBlocks = dict[_Address, _CfgBlock]
 
 
 @dataclass
@@ -30,6 +34,17 @@ class _ScriptVar:
     @property
     def name(self) -> str:
         return f"var{self.id_}"
+
+
+@dataclass
+class _CfgBlock:
+    instructions: list[Instruction]
+    preds: list[_CfgBlock] = field(default_factory=list)
+    succs: list[_CfgBlock] = field(default_factory=list)
+
+    def link_to(self, target: Self) -> None:
+        self.succs.append(target)
+        target.preds.append(self)
 
 
 class Decompiler:
@@ -96,8 +111,8 @@ class Decompiler:
         self._stack: list
         self._statements: list[STStatement]
         self._labels: list[Label]
-        self._locals: dict[MemOffset, _LocalVar]
-        self._svars: dict[MemOffset, _ScriptVar] = {}
+        self._locals: dict[_MemOffset, _LocalVar]
+        self._svars: dict[_MemOffset, _ScriptVar] = {}
 
         self._sp: int = 0
         self._mar: int | FixedUpValue | STBinaryExpression = 0
@@ -112,15 +127,14 @@ class Decompiler:
         self._build_script()
 
     def _build_cfg(self) -> None:
-        """Builds a control flow graph for the script."""
+        # all our entry points are given as function names in the exports table.
         for func in self.dis.functions:
             leaders = self._find_leaders(func)
             blocks = self._build_blocks(func.instructions, leaders)
-        # all our entry points are given as function names in the exports table.
+            self._link_blocks(blocks)
 
-    def _find_leaders(self, func: Function) -> set[Instruction]:
-        """Finds code flow block leaders in the given function."""
-        leaders: set[Instruction] = set()
+    def _find_leaders(self, func: Function) -> _Leaders:
+        leaders: _Leaders = set()
         if not func.instructions:
             return leaders
         leaders.add(func.instructions[0])  # the first instruction is a leader
@@ -129,18 +143,17 @@ class Decompiler:
                 target = inst.params[0]
                 assert isinstance(target, Label)
                 leaders.add(func.lookup[target.to])
-            if inst.opcode in self._TERMINATORS:
-                next_ = at(func.instructions, i + 1)
-                if next_:
-                    leaders.add(next_)
+            if inst.opcode in self._TERMINATORS and i + 1 < len(func.instructions):
+                leaders.add(func.instructions[i + 1])
         return leaders
 
     def _build_blocks(
-        self, instructions: list[Instruction], leaders: set[Instruction]
-    ) -> dict[int, list[Instruction]]:
-        """Builds blocks from the given instruction list and control flow leaders."""
-        blocks: list[list[Instruction]] = []
-        current: list[Instruction] = []
+        self,
+        instructions: _InstructionList,
+        leaders: _Leaders,
+    ) -> _CodeBlocks:
+        blocks: list[_InstructionList] = []
+        current: _InstructionList = []
         for inst in instructions:
             if inst in leaders and current:
                 blocks.append(current)
@@ -148,7 +161,30 @@ class Decompiler:
             current.append(inst)
         if current:
             blocks.append(current)
-        return {b[0].offset: b for b in blocks}
+        return {b[0].offset: _CfgBlock(b) for b in blocks}
+
+    def _link_blocks(self, blocks: _CodeBlocks) -> None:
+        addresses = sorted(blocks)
+        for i, address in enumerate(addresses):
+            block = blocks[address]
+            last = block.instructions[-1]
+            if last.opcode == Opcode.JMP:
+                label = last.params[0]
+                assert isinstance(label, Label)
+                block.link_to(blocks[label.to])
+            elif last.opcode in self._BRANCH:
+                label = last.params[0]
+                assert isinstance(label, Label)
+                block.link_to(blocks[label.to])
+                if i + 1 < len(addresses):
+                    block.link_to(blocks[addresses[i + 1]])
+            elif last.opcode == Opcode.RET:
+                # return is the exit node, no linking here.
+                pass
+            else:
+                # fallthrough
+                if i + 1 < len(addresses):
+                    block.link_to(blocks[addresses[i + 1]])
 
     def _decompile(self) -> None:
         for func in self.dis.functions:
