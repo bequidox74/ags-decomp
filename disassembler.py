@@ -173,7 +173,8 @@ class Label(Parameter):
         return self.as_param()
 
 
-class Instruction(NamedTuple):
+@dataclass
+class Instruction:
     opcode: Opcode
     params: list[Parameter]
     offset: int
