@@ -11,6 +11,7 @@ type _InstructionList = list[Instruction]
 type _Leaders = set[Instruction]
 type _Address = int
 type _CodeBlocks = dict[_Address, _CfgBlock]
+type _WriteTarget = Literal["local", "script", "global", "array"]
 
 
 @dataclass
@@ -92,9 +93,9 @@ class Decompiler:
         Opcode.RET,
     } | _BRANCH
 
-    _COUNTER_LOCAL: ClassVar = "local"
-    _COUNTER_SCRVAR: ClassVar = "script"
-    _COUNTER_GLOBAL: ClassVar = "global"
+    _COUNTER_LOCAL: ClassVar[_WriteTarget] = "local"
+    _COUNTER_SCRVAR: ClassVar[_WriteTarget] = "script"
+    _COUNTER_GLOBAL: ClassVar[_WriteTarget] = "global"
 
     _GLOBAL_LABEL: ClassVar = "global"
 
@@ -104,7 +105,7 @@ class Decompiler:
         self._gdata = bytearray(self.dis.gdata)
         self._linenum = 0
         self._thisbase = 0
-        self._write_target: Literal["global", "local", "script", "array"] = "global"  # noqa: UP037
+        self._write_target: _WriteTarget = "global"
         self._array_item_count = 0
         self._counters: dict[str, int] = {}
 
