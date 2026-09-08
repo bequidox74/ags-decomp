@@ -7,7 +7,7 @@ from typing import NamedTuple, TypeAlias
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
-from utils import format_bindata, quote, sjoin
+from utils import format_bindata, quote
 
 Primitive: TypeAlias = int | str | float
 
@@ -201,6 +201,14 @@ class Instruction:
     def __hash__(self) -> int:
         return hash(self.offset)
 
+    def __str__(self) -> str:
+        mnemonic = self.opcode.mnemonic
+        fmt_params = ", ".join(map(str, self.params))
+        result = [mnemonic]
+        if fmt_params:
+            result.append(fmt_params)
+        return " ".join(result)
+
 
 class Function(NamedTuple):
     name: str
@@ -258,12 +266,9 @@ class Disassembly:
                         sw.level = old_level
 
                     is_linenum = item.opcode == Opcode.LINENUM
-                    out = item.opcode.mnemonic
                     if is_linenum:
                         sw.dedent()
-                    if item.params:
-                        out += f" {sjoin(', ', item.params)}"
-                    sw.println(out)
+                    sw.println(str(item))
                     if is_linenum:
                         sw.indent()
                     pc += 1 + len(item.params)
