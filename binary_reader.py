@@ -9,6 +9,9 @@ from typing import BinaryIO, Literal, Self
 # Vibecoded with ChatGPT to avoid an external dependency.
 
 
+type Source = bytes | bytearray | memoryview[int] | str | os.PathLike | BinaryIO
+
+
 class BinaryReader:
     """
     Small binary reader for bytes, files, and paths.
@@ -18,10 +21,10 @@ class BinaryReader:
 
     def __init__(
         self,
-        source: bytes | bytearray | memoryview | str | os.PathLike | BinaryIO,
+        source: Source,
         encoding: str = "utf-8",
         byteorder: Literal["big", "little"] = "little",
-    ):
+    ) -> None:
         if byteorder not in ("little", "big"):
             raise ValueError("byteorder must be 'little' or 'big'")
 
@@ -212,5 +215,5 @@ class BinaryReader:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
         self.close()

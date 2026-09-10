@@ -446,8 +446,12 @@ class Decompiler:
             return rv
         elif isinstance(rv, int | float | str):
             return STLiteral(rv)
-        elif isinstance(rv, FixedUpValue) and rv.type_ == FixupType.NO_FIXUP:
-            return STLiteral(rv.original)
+        elif isinstance(rv, FixedUpValue):
+            if rv.type_ == FixupType.NO_FIXUP:
+                return STLiteral(rv.original)
+            elif rv.type_ == FixupType.IMPORT:
+                return STLiteral(str(rv.fixed))
+            raise NotImplementedError
         else:
             raise NotImplementedError
 

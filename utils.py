@@ -5,6 +5,11 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
+def verify(cond: bool, *args) -> None:
+    if not cond:
+        raise AssertionError(*args)
+
+
 def sjoin(joiner: str, it: Iterable):
     return joiner.join(str(x) for x in it)
 
