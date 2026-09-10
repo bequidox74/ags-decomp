@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+import logging
 from dataclasses import field
 from typing import ClassVar, Self
 
@@ -12,6 +14,9 @@ type _Leaders = set[Instruction]
 type _Address = int
 type _CodeBlocks = dict[_Address, _CfgBlock]
 type _WriteTarget = Literal["local", "script", "global", "array"]
+type _Dominators = dict[_CfgBlock, set[_CfgBlock]]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,6 +51,9 @@ class _CfgBlock:
     def link_to(self, target: Self) -> None:
         self.succs.append(target)
         target.preds.append(self)
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 class Decompiler:
@@ -109,6 +117,8 @@ class Decompiler:
         self._array_item_count = 0
         self._counters: dict[str, int] = {}
 
+        self._max_doms_iters = 0
+
         self._stack: list
         self._statements: list[STStatement]
         self._labels: list[Label]
@@ -130,9 +140,16 @@ class Decompiler:
     def _build_cfg(self) -> None:
         # all our entry points are given as function names in the exports table.
         for func in self.dis.functions:
+            logger.debug("building CFG for func %s$%s", func.name, func.nargs)
             leaders = self._find_leaders(func)
             blocks = self._build_blocks(func.instructions, leaders)
             self._link_blocks(blocks)
+
+            blocks = list(blocks.values())
+            reverse_blocks = self._reverse_cfg(blocks)
+            predoms = self._find_dominators(blocks)
+            postdoms = self._find_dominators(reverse_blocks)
+        logger.debug("max domtree iterations: %d", self._max_doms_iters)
 
     def _find_leaders(self, func: Function) -> _Leaders:
         leaders: _Leaders = set()
@@ -186,6 +203,50 @@ class Decompiler:
                 # fallthrough
                 if i + 1 < len(addresses):
                     block.link_to(blocks[addresses[i + 1]])
+
+    def _find_dominators(self, blocks: list[_CfgBlock]) -> _Dominators:
+        """
+        Naive dominators tree algorithm. Has quadratic time complexity in
+        the worst case, but may converge faster on less complicated graphs.
+        """
+        entry = blocks[0]
+        # assert not entry.preds, "non-entry node as first item in blocks"
+
+        # assume everything is dominated by everything
+        doms = {b: set(blocks) for b in blocks}
+        doms[entry] = {entry}  # except entry, which is only dominated by itself
+        changed = True
+        iters = 0
+        while changed:  # loop until there are no updates to the tree
+            iters += 1
+            changed = False
+            for k, v in doms.items():
+                if k == entry:
+                    # entry only dominates itself by definition; no need to update.
+                    continue
+                preds = k.preds
+                if not preds:
+                    continue
+                # find common dominators of this node's predecessors
+                new_doms = set.intersection(*(doms[p] for p in preds))
+                if new_doms != v:
+                    doms[k] = new_doms
+                    changed = True
+        self._max_doms_iters = max(self._max_doms_iters, iters)
+        return doms
+
+    def _reverse_cfg(self, blocks: list[_CfgBlock]) -> list[_CfgBlock]:
+        """Reverses a copy of the provided CFG."""
+        leaves = [b for b in blocks if not b.succs]
+        synthetic_exit = _CfgBlock([], leaves, [])
+
+        result: list[_CfgBlock] = [synthetic_exit]
+        copies = {b: _CfgBlock(b.instructions, [], []) for b in blocks}
+        for b in blocks:
+            copy = copies[b]
+            copy.preds = [copies[p] for p in b.preds]
+            copy.succs = [copies[s] for s in b.succs]
+        return result
 
     def _decompile(self) -> None:
         for func in self.dis.functions:
@@ -290,7 +351,8 @@ class Decompiler:
                 elif opc == Opcode.RET:
                     pass  # TODO: return values
                 else:
-                    raise NotImplementedError(opc)
+                    pass
+                    # raise NotImplementedError(opc)
 
             stfunc = STFunction("function", func.name, [], self._statements)
             self._stfuncs.append(stfunc)
@@ -298,14 +360,14 @@ class Decompiler:
     def _emit_vardecl(self, size: int) -> None:
         # globals are initialized by the compiler, and local variables are the
         # only other place where declaration without definition is legal.
-        assert self._write_target == "local", "Illegal target for local"
+        assert self._write_target == "local", "illegal target for local"
 
         # again, we can only declare locals here, so MAR should have the value
         # of SP, which is guaranteed to be in int.
         assert isinstance(self._mar, int), "MAR has non-int before declaring local"
 
         lvar = self._get_local(self._mar, size)
-        assert lvar.is_newly_created, "Declaring an existing local"
+        assert lvar.is_newly_created, "declaring an existing local"
         type_ = self._guess_type_from_size(size)
         stmt = STVarDeclaration(type_, lvar.name)
         lvar.declaration = stmt
@@ -316,14 +378,15 @@ class Decompiler:
         target: STAssignmentTarget
         match self._write_target:
             case "local":
-                assert isinstance(self._mar, int)
+                assert isinstance(self._mar, int), "writing to a local with non-int MAR"
                 lvar = self._get_local(self._mar, size)
                 type_ = None
                 if lvar.is_newly_created:
                     type_ = self._guess_type_from_size(lvar.size)
                 else:
-                    # the variable must already be declared
-                    assert lvar.declaration is not None
+                    assert lvar.declaration is not None, (
+                        "variable must already be declared"
+                    )
                 target = STVarAssignTarget(lvar.name, None, type_)
             case "global":
                 assert isinstance(self._mar, FixedUpValue)
@@ -349,18 +412,22 @@ class Decompiler:
                     assert isinstance(var.fixed, str)
                     type_ = self._guess_type_from_size(size)
                     target = STVarAssignTarget(var.fixed, index, type_)
+                else:
+                    raise TypeError
             case "script":
                 assert isinstance(self._mar, FixedUpValue)
                 assert self._mar.type_ == FixupType.GLOBAL_DATA
                 svar = self._get_svar(self._mar.original, size)
                 assert svar.type_ is not None
                 target = STVarAssignTarget(svar.name, None, svar.type_)
+            case _:
+                raise RuntimeError()
 
         # R determines the value
         r = inst.as_reg(0)
         v = self._make_expr(r)
 
-        stmt = STAssignment(target, v)  # pyright: ignore[reportPossiblyUnboundVariable]
+        stmt = STAssignment(target, v)
         self._statements.append(stmt)
 
     def _emit_varexpr(self, size: int, r: Register) -> None:
