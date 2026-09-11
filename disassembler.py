@@ -197,6 +197,9 @@ class Instruction:
         if type_ is not None:
             assert fup.type_ == type_
         return fup
+    
+    def __post_init__(self) -> None:
+        assert len(self.params) <= 3
 
     def __hash__(self) -> int:
         return hash(self.offset)
@@ -208,6 +211,9 @@ class Instruction:
         if fmt_params:
             result.append(fmt_params)
         return " ".join(result)
+
+    def __repr__(self) -> str:
+        return f"<Instruction '{self}'>"
 
 
 class Function(NamedTuple):

@@ -3,22 +3,22 @@ from __future__ import annotations
 import gc
 import logging
 from dataclasses import field
-from typing import ClassVar, Final, Self
+from typing import ClassVar, Final
 
 from disassembler import *
 from syntax_tree import *
+from utils import sjoin
 
 type _MemOffset = int
-type _InstructionList = list[Instruction]
-type _Leaders = set[Instruction]
 type _Address = int
-type _CodeBlocks = dict[_Address, _CfgBlock]
+type _CodeBlocks = dict[_Address, _Block]
 type _WriteTarget = Literal["local", "script", "global", "array"]
-type _Dominators = dict[_CfgBlock, set[_CfgBlock]]
+type _Dominators = dict[_Block, set[_Block]]
+type _IDomTree = dict[_Block, _Block]
 
 logger = logging.getLogger(__name__)
 
-_DIAGNOSTICS: Final = True
+_DIAGNOSTICS: Final[bool] = True
 
 
 @dataclass
@@ -45,17 +45,54 @@ class _ScriptVar:
 
 
 @dataclass
-class _CfgBlock:
+class _Block:
     instructions: list[Instruction]
-    preds: list[_CfgBlock] = field(default_factory=list)
-    succs: list[_CfgBlock] = field(default_factory=list)
 
-    def link_to(self, target: Self) -> None:
-        self.succs.append(target)
-        target.preds.append(self)
+    def __str__(self) -> str:
+        if not self.instructions:
+            return ""
+        return sjoin("; ", self.instructions[0], "...", self.instructions[-1])
+
+    def __repr__(self) -> str:
+        return f"<CfgBlock '{self}'>"
 
     def __hash__(self) -> int:
         return id(self)
+
+    def __eq__(self, value: object) -> bool:
+        return self is value
+
+
+@dataclass
+class _CFGraph:
+    _preds: dict[_Block, list[_Block]] = field(default_factory=dict)
+    _succs: dict[_Block, list[_Block]] = field(default_factory=dict)
+
+    def link(self, from_: _Block, to: _Block) -> None:
+        self._succs.setdefault(from_, []).append(to)
+        self._preds.setdefault(to, []).append(from_)
+
+    def unlink(self, from_: _Block, to: _Block) -> None:
+        self._succs.get(from_, []).remove(to)
+        self._preds.get(to, []).remove(from_)
+
+    def reverse(self) -> _CFGraph:
+        result = _CFGraph()
+        for b, p in self._preds.items():
+            result._succs[b] = p  # pylint: disable=W0212
+        for b, s in self._succs.items():
+            result._preds[b] = s  # pylint: disable=W0212
+        return result
+
+    def preds(self, b: _Block) -> list[_Block]:
+        return self._preds.setdefault(b, [])
+
+    def succs(self, b: _Block) -> list[_Block]:
+        return self._succs.setdefault(b, [])
+
+    def __delitem__(self, key: _Block) -> None:
+        del self._preds[key]
+        del self._succs[key]
 
 
 class Decompiler:
@@ -100,8 +137,9 @@ class Decompiler:
     }
 
     _TERMINATORS: ClassVar = {
-        Opcode.RET,
-    } | _BRANCH
+        Opcode.JZ,
+        Opcode.JNZ,
+    }
 
     _COUNTER_LOCAL: ClassVar[_WriteTarget] = "local"
     _COUNTER_SCRVAR: ClassVar[_WriteTarget] = "script"
@@ -121,11 +159,14 @@ class Decompiler:
 
         self._max_doms_iters = 0
         self._cfg_node_count: list[tuple[str, int]]
+        self._emitted = []
 
-        self._stack: list
-        self._statements: list[STStatement]
-        self._labels: list[Label]
-        self._locals: dict[_MemOffset, _LocalVar]
+        self._dom: _IDomTree = {}
+        self._postdom: _IDomTree = {}
+
+        self._stack: list = []
+        self._labels: list[Label] = []
+        self._locals: dict[_MemOffset, _LocalVar] = {}
         self._svars: dict[_MemOffset, _ScriptVar] = {}
 
         self._sp: int = 0
@@ -137,7 +178,6 @@ class Decompiler:
         self._dx = 0
 
         self._build_cfg()
-        self._decompile()
         self._build_script()
 
     def _build_cfg(self) -> None:
@@ -146,16 +186,27 @@ class Decompiler:
 
         # all our entry points are given as function names in the exports table.
         for func in self.dis.functions:
-            logger.debug("building CFG for func %s$%s", func.name, func.nargs)
+            logger.debug("building CFG for func %s$%d", func.name, func.nargs)
             leaders = self._find_leaders(func)
             blocks = self._build_blocks(func.instructions, leaders)
-            self._link_blocks(blocks)
+            cfg, omega = self._link_blocks(blocks)
             self._cfg_node_count.append((func.name, len(blocks)))
 
-            blocks = list(blocks.values())
-            reverse_blocks = self._reverse_cfg(blocks)
-            predoms = self._find_dominators(blocks)
-            postdoms = self._find_dominators(reverse_blocks)
+            stmts: list[STStatement] = []
+            if not blocks:
+                logger.debug("skipping empty function")
+            else:
+                blocks_list = list(blocks.values())
+                reverse_cfg = cfg.reverse()
+                dom = self._find_dominators(blocks_list, cfg, blocks_list[0])
+                postdom = self._find_dominators(blocks_list, reverse_cfg, omega)
+                self._dom = self._idom_tree(dom)
+                self._postdom = self._idom_tree(postdom)
+                stmts = self._decompile(blocks_list, cfg)
+
+            stblock = STBlock(stmts)
+            stfunc = STFunction("function", func.name, [], stblock)
+            self._stfuncs.append(stfunc)
 
         if _DIAGNOSTICS:
             logger.info("max domtree iterations: %d", self._max_doms_iters)
@@ -165,8 +216,8 @@ class Decompiler:
             )
         gc.collect()  # force a GC to release unused memory
 
-    def _find_leaders(self, func: Function) -> _Leaders:
-        leaders: _Leaders = set()
+    def _find_leaders(self, func: Function) -> set[Instruction]:
+        leaders: set[Instruction] = set()
         if not func.instructions:
             return leaders
         leaders.add(func.instructions[0])  # the first instruction is a leader
@@ -181,11 +232,11 @@ class Decompiler:
 
     def _build_blocks(
         self,
-        instructions: _InstructionList,
-        leaders: _Leaders,
+        instructions: list[Instruction],
+        leaders: set[Instruction],
     ) -> _CodeBlocks:
-        blocks: list[_InstructionList] = []
-        current: _InstructionList = []
+        blocks: list[list[Instruction]] = []
+        current: list[Instruction] = []
         for inst in instructions:
             if inst in leaders and current:
                 blocks.append(current)
@@ -193,185 +244,225 @@ class Decompiler:
             current.append(inst)
         if current:
             blocks.append(current)
-        return {b[0].offset: _CfgBlock(b) for b in blocks}
+        return {b[0].offset: _Block(b) for b in blocks}
 
-    def _link_blocks(self, blocks: _CodeBlocks) -> None:
+    def _link_blocks(self, blocks: _CodeBlocks) -> tuple[_CFGraph, _Block]:
+        cfg = _CFGraph()
         addresses = sorted(blocks)
         for i, address in enumerate(addresses):
             block = blocks[address]
             last = block.instructions[-1]
-            if last.opcode == Opcode.JMP:
+            if last.opcode == Opcode.JMP or last.opcode in self._BRANCH:
                 label = last.params[0]
                 assert isinstance(label, Label)
-                block.link_to(blocks[label.to])
-            elif last.opcode in self._BRANCH:
-                label = last.params[0]
-                assert isinstance(label, Label)
-                block.link_to(blocks[label.to])
-                if i + 1 < len(addresses):
-                    block.link_to(blocks[addresses[i + 1]])
+                if last.opcode in self._BRANCH and i + 1 < len(addresses):
+                    cfg.link(block, blocks[addresses[i + 1]])
+                cfg.link(block, blocks[label.to])
             elif last.opcode == Opcode.RET:
-                # return is the exit node, no linking here.
-                pass
-            else:
-                # fallthrough
+                pass  # return is the exit node, no linking here.
+            else:  # fallthrough
                 if i + 1 < len(addresses):
-                    block.link_to(blocks[addresses[i + 1]])
+                    cfg.link(block, blocks[addresses[i + 1]])
 
-    def _find_dominators(self, blocks: list[_CfgBlock]) -> _Dominators:
-        """
-        Naive dominators tree algorithm. Has quadratic time complexity in
-        the worst case, but may converge faster on less complicated graphs.
-        """
-        entry = blocks[0]
-        # assert not entry.preds, "non-entry node as first item in blocks"
+        # prune dead code
+        for bl in blocks.values():
+            if not cfg.preds(bl) and not cfg.succs(bl):
+                del cfg[bl]
 
+        # find leaves and insert a synthetic exit node
+        leaves = {b for b in blocks.values() if not cfg.succs(b)}
+        omega = _Block([])
+        for l in leaves:
+            cfg.link(l, omega)
+
+        return cfg, omega
+
+    def _find_dominators(
+        self, blocks: list[_Block], graph: _CFGraph, alpha: _Block
+    ) -> _Dominators:
+        # worst case is quadratic; usually converges faster.
         # assume everything is dominated by everything
         doms = {b: set(blocks) for b in blocks}
-        doms[entry] = {entry}  # except entry, which is only dominated by itself
+        doms[alpha] = {alpha}  # except entry, which is only dominated by itself
         changed = True
         iters = 0
         while changed:  # loop until there are no updates to the tree
             iters += 1
             changed = False
             for k, v in doms.items():
-                if k == entry:
+                if k == alpha:
                     # entry only dominates itself by definition; no need to update.
                     continue
-                preds = k.preds
+                preds = graph.preds(k)
                 if not preds:
                     continue
                 # find common dominators of this node's predecessors
-                new_doms = set.intersection(*(doms[p] for p in preds))
+                new_doms = {k} | set.intersection(*(doms[p] for p in preds))
                 if new_doms != v:
                     doms[k] = new_doms
                     changed = True
         self._max_doms_iters = max(self._max_doms_iters, iters)
         return doms
 
-    def _reverse_cfg(self, blocks: list[_CfgBlock]) -> list[_CfgBlock]:
-        """Reverses a copy of the provided CFG."""
-        leaves = [b for b in blocks if not b.succs]
-        synthetic_exit = _CfgBlock([], leaves, [])
+    def _idom_tree(self, dom: _Dominators) -> _IDomTree:
+        idom = {}
+        for bl, dset in dom.items():
+            strict = dset - {bl}
+            if strict:
+                idom[bl] = max(strict, key=lambda x: len(dom[x]))
+        return idom
 
-        result: list[_CfgBlock] = [synthetic_exit]
-        copies = {b: _CfgBlock(b.instructions, [], []) for b in blocks}
-        for b in blocks:
-            copy = copies[b]
-            copy.preds = [copies[p] for p in b.preds]
-            copy.succs = [copies[s] for s in b.succs]
-        return result
+    def _decompile(self, blocks: list[_Block], cfg: _CFGraph) -> list[STStatement]:
+        self._stack = []
+        self._labels = []
+        self._locals = {}
 
-    def _decompile(self) -> None:
-        for func in self.dis.functions:
-            self._stack = []
-            self._labels = []
-            self._locals = {}
-            self._statements = []
+        alpha = blocks[0]
+        return self._decomp_region(cfg, alpha)
 
-            for item in func.instructions:
-                if isinstance(item, Label):
-                    self._labels.append(item)
-                    continue
+    def _decomp_region(
+        self, cfg: _CFGraph, in_block: _Block, stop: _Block | None = None
+    ) -> list[STStatement]:
+        stmts: list[STStatement] = []
+        block: _Block | None = in_block
+        while block is not None and block != stop:
+            if not block.instructions:
+                return stmts
+            stmts.extend(self._decomp_block(block))
+            term = block.instructions[-1]
+            if term.opcode is Opcode.RET:
+                block = None
+            elif term.opcode is Opcode.JZ:
+                block = self._decomp_cond(cfg, block, stmts)
+            else:
+                # block = block.succs[0] if block.succs else None
+                block = cfg.succs(block)[0] if cfg.succs(block) else None
+        return stmts
 
-                opc = item.opcode
-                if opc in self._BINOPS:
-                    ra = item.as_reg(0)
-                    rb = item.as_reg(1)
-                    a = self._make_expr(ra)
-                    b = self._make_expr(rb)
-                    expr = STBinaryExpression(a, b, self._BINOPS[opc])
-                    self._setr(ra, expr)
+    def _decomp_cond(
+        self, cfg: _CFGraph, block: _Block, stmts: list[STStatement]
+    ) -> _Block | None:
+        assert len(cfg.succs(block)) == 2, "cond node must have exactly 2 successors"
+        taken, fallthrough = cfg.succs(block)
+        merge = self._postdom[block]
+        cond = self._make_expr(Register.AX)
 
-                    if ra == Register.MAR and rb == Register.CX:
-                        # array index, CX will hold an expression at this point
-                        self._write_target = "array"
-                elif opc in self._BINOPS_LITERAL:
-                    r = item.as_reg(0)
-                    v = item.as_int(1)
-                    if r == Register.SP:  # offsets only
-                        if opc == Opcode.ADD:
-                            self._sp += v
-                        elif opc == Opcode.SUB:
-                            self._sp -= v
-                        else:
-                            raise AssertionError
+        if fallthrough == merge:
+            then = STBlock(self._decomp_region(cfg, taken, merge))
+            stmts.append(STIfStatement(cond, then, None))
+            return merge
+        if taken == merge:
+            raise NotImplementedError
+        else:
+            self._decomp_region(cfg, fallthrough, merge)
+
+        then = STBlock(self._decomp_region(cfg, taken, merge))
+        else_ = STBlock(self._decomp_region(cfg, fallthrough, merge))
+        stmts.append(STIfStatement(cond, then, else_))
+        return merge
+
+    def _decomp_block(self, block: _Block) -> list[STStatement]:
+        stmts: list[STStatement] = []
+        for inst in block.instructions:
+            if isinstance(inst, Label):
+                self._labels.append(inst)
+                continue
+
+            opc = inst.opcode
+            if opc in self._BINOPS:
+                ra = inst.as_reg(0)
+                rb = inst.as_reg(1)
+                a = self._make_expr(ra)
+                b = self._make_expr(rb)
+                expr = STBinaryExpression(a, b, self._BINOPS[opc])
+                self._setr(ra, expr)
+
+                if ra == Register.MAR and rb == Register.CX:
+                    # array index, CX will hold an expression at this point
+                    self._write_target = "array"
+            elif opc in self._BINOPS_LITERAL:
+                r = inst.as_reg(0)
+                v = inst.as_int(1)
+                if r == Register.SP:  # offsets only
+                    if opc == Opcode.ADD:
+                        self._sp += v
+                    elif opc == Opcode.SUB:
+                        self._sp -= v
                     else:
-                        left = self._make_expr(r)
-                        right = STLiteral(v)
-                        expr = STBinaryExpression(
-                            left, right, self._BINOPS_LITERAL[opc]
-                        )
-                        self._setr(r, expr)
-                elif opc == Opcode.LINENUM:
-                    self._linenum = item.as_int(0)
-                elif opc == Opcode.THISBASE:
-                    self._thisbase = item.as_int(0)
-                elif opc == Opcode.PUSHREG:
-                    rv = self._getr(item.as_reg(0))
-                    self._stack.append(rv)
-                elif opc == Opcode.POPREG:
-                    rv = item.as_reg(0)
-                    v = self._stack.pop()
-                    self._setr(rv, v)
-                elif opc == Opcode.REGTOREG:  # R1 -> R2
-                    rs = item.as_reg(0)
-                    rd = item.as_reg(1)
-                    self._setr(rd, self._getr(rs))
-
-                    if rs == Register.SP and rd == Register.MAR:
-                        # local vars are written using SP
-                        self._write_target = "local"
-                elif opc == Opcode.LITTOREG:  # R <- A
-                    reg = item.as_reg(0)
-                    v = item.as_fup(1)
-                    self._setr(reg, v)
-
-                    if reg == Register.MAR:
-                        if v.type_ == FixupType.GLOBAL_DATA:
-                            # top-level script var
-                            self._write_target = "script"
-                        elif v.type_ == FixupType.IMPORT:
-                            # true global var
-                            self._write_target = "global"
-                elif opc == Opcode.LOADSPOFFS:
-                    offset = item.as_int(0)
-                    self._mar = self._sp - offset
-                    assert self._mar >= 0
-                    self._write_target = "local"  # writing to stack, so must be a local
-                elif opc == Opcode.ZEROMEMORY:
-                    size = item.as_int(0)
-                    self._emit_vardecl(size)
-                elif opc == Opcode.MEMWRITEB:
-                    self._emit_assign(item, 1)
-                elif opc == Opcode.MEMWRITEW:
-                    self._emit_assign(item, 2)
-                elif opc == Opcode.MEMWRITE:
-                    self._emit_assign(item, 4)
-                elif opc == Opcode.CHECKBOUNDS:
-                    r = item.as_reg(0)
-                    assert r == Register.AX  # i'm not sure if this is always the case
-                    v = item.as_int(1)
-                    self._array_item_count = v
-                elif opc == Opcode.MEMREADB:
-                    r = item.as_reg(0)
-                    self._emit_varexpr(1, r)
-                elif opc == Opcode.MEMREADW:
-                    r = item.as_reg(0)
-                    self._emit_varexpr(2, r)
-                elif opc == Opcode.MEMREAD:
-                    r = item.as_reg(0)
-                    self._emit_varexpr(4, r)
-                elif opc == Opcode.RET:
-                    pass  # TODO: return values
+                        raise AssertionError
                 else:
-                    pass
-                    # raise NotImplementedError(opc)
+                    left = self._make_expr(r)
+                    right = STLiteral(v)
+                    expr = STBinaryExpression(left, right, self._BINOPS_LITERAL[opc])
+                    self._setr(r, expr)
+            elif opc == Opcode.LINENUM:
+                self._linenum = inst.as_int(0)
+            elif opc == Opcode.THISBASE:
+                self._thisbase = inst.as_int(0)
+            elif opc == Opcode.PUSHREG:
+                rv = self._getr(inst.as_reg(0))
+                self._stack.append(rv)
+            elif opc == Opcode.POPREG:
+                rv = inst.as_reg(0)
+                v = self._stack.pop()
+                self._setr(rv, v)
+            elif opc == Opcode.REGTOREG:  # R1 -> R2
+                rs = inst.as_reg(0)
+                rd = inst.as_reg(1)
+                self._setr(rd, self._getr(rs))
 
-            stfunc = STFunction("function", func.name, [], self._statements)
-            self._stfuncs.append(stfunc)
+                if rs == Register.SP and rd == Register.MAR:
+                    # local vars are written using SP
+                    self._write_target = "local"
+            elif opc == Opcode.LITTOREG:  # R <- A
+                reg = inst.as_reg(0)
+                v = inst.as_fup(1)
+                self._setr(reg, v)
 
-    def _emit_vardecl(self, size: int) -> None:
+                if reg == Register.MAR:
+                    if v.type_ == FixupType.GLOBAL_DATA:
+                        # top-level script var
+                        self._write_target = "script"
+                    elif v.type_ == FixupType.IMPORT:
+                        # true global var
+                        self._write_target = "global"
+            elif opc == Opcode.LOADSPOFFS:
+                offset = inst.as_int(0)
+                self._mar = self._sp - offset
+                assert self._mar >= 0
+                self._write_target = "local"  # writing to stack, so must be a local
+            elif opc == Opcode.ZEROMEMORY:
+                size = inst.as_int(0)
+                self._emit_vardecl(size)
+            elif opc == Opcode.MEMWRITEB:
+                stmts.append(self._emit_assign(inst, 1))
+            elif opc == Opcode.MEMWRITEW:
+                stmts.append(self._emit_assign(inst, 2))
+            elif opc == Opcode.MEMWRITE:
+                stmts.append(self._emit_assign(inst, 4))
+            elif opc == Opcode.CHECKBOUNDS:
+                r = inst.as_reg(0)
+                assert r == Register.AX  # i'm not sure if this is always the case
+                v = inst.as_int(1)
+                self._array_item_count = v
+            elif opc == Opcode.MEMREADB:
+                r = inst.as_reg(0)
+                self._exec_varexpr(1, r)
+            elif opc == Opcode.MEMREADW:
+                r = inst.as_reg(0)
+                self._exec_varexpr(2, r)
+            elif opc == Opcode.MEMREAD:
+                r = inst.as_reg(0)
+                self._exec_varexpr(4, r)
+            elif opc == Opcode.RET:
+                ret = self._make_expr(Register.AX)
+                stmts.append(STReturn(ret))
+            else:
+                pass
+                # raise NotImplementedError(opc)
+        return stmts
+
+    def _emit_vardecl(self, size: int) -> STVarDeclaration:
         # globals are initialized by the compiler, and local variables are the
         # only other place where declaration without definition is legal.
         assert self._write_target == "local", "illegal target for local"
@@ -385,9 +476,9 @@ class Decompiler:
         type_ = self._guess_type_from_size(size)
         stmt = STVarDeclaration(type_, lvar.name)
         lvar.declaration = stmt
-        self._statements.append(stmt)
+        return stmt
 
-    def _emit_assign(self, inst: Instruction, size: int) -> None:
+    def _emit_assign(self, inst: Instruction, size: int) -> STAssignment:
         # MAR + write target determine the LHS
         target: STAssignmentTarget
         match self._write_target:
@@ -434,17 +525,13 @@ class Decompiler:
                 svar = self._get_svar(self._mar.original, size)
                 assert svar.type_ is not None
                 target = STVarAssignTarget(svar.name, None, svar.type_)
-            case _:
-                raise RuntimeError()
 
         # R determines the value
         r = inst.as_reg(0)
         v = self._make_expr(r)
+        return STAssignment(target, v)
 
-        stmt = STAssignment(target, v)
-        self._statements.append(stmt)
-
-    def _emit_varexpr(self, size: int, r: Register) -> None:
+    def _exec_varexpr(self, size: int, r: Register) -> None:
         if isinstance(self._mar, int):
             lvar = self._get_local(self._mar, size)
             self._setr(r, STVarExpression(lvar.name, None))
