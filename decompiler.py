@@ -57,7 +57,12 @@ class _CfgBlock:
         target.preds.append(self)
 
     def __hash__(self) -> int:
-        return id(self)
+        return id(self.instructions)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _CfgBlock):
+            return False
+        return self.instructions is other.instructions
 
     def __str__(self) -> str:
         if not self.instructions:
@@ -158,20 +163,25 @@ class Decompiler:
 
         # all our entry points are given as function names in the exports table.
         for func in self.dis.functions:
-            logger.debug("building CFG for func %s$%s", func.name, func.nargs)
+            logger.debug("building CFG for func %s$%d", func.name, func.nargs)
             leaders = self._find_leaders(func)
             blocks = self._build_blocks(func.instructions, leaders)
             self._link_blocks(blocks)
             self._cfg_node_count.append((func.name, len(blocks)))
 
-            blocks = list(blocks.values())
-            reverse_blocks = self._reverse_cfg(blocks)
-            dom = self._find_dominators(blocks)
-            postdom = self._find_dominators(reverse_blocks)
-            self._dom = self._idom_tree(dom)
-            self._postdom = self._idom_tree(postdom)
+            stmts: list[STStatement] = []
+            if not blocks:
+                logger.debug("skipping empty function")
+            else:
+                blocks = list(blocks.values())
+                reverse_blocks = self._reverse_cfg(blocks)
+                dom = self._find_dominators(blocks)
+                postdom = self._find_dominators(reverse_blocks)
+                self._dom = self._idom_tree(dom)
+                self._postdom = self._idom_tree(postdom)
 
-            stmts = self._decompile(blocks)
+                stmts = self._decompile(blocks)
+
             stblock = STBlock(stmts)
             stfunc = STFunction("function", func.name, [], stblock)
             self._stfuncs.append(stfunc)
@@ -237,31 +247,35 @@ class Decompiler:
                 if i + 1 < len(addresses):
                     block.link_to(blocks[addresses[i + 1]])
 
+        # prune dead code
+        for addr, bl in list(blocks.items()):
+            if not bl.preds and not bl.succs:
+                del blocks[addr]
+
     def _find_dominators(self, blocks: list[_CfgBlock]) -> _Dominators:
         """
         Naive dominators tree algorithm. Has quadratic time complexity in
-        the worst case, but may converge faster on less complicated graphs.
+        the worst case, but should converge faster on less complicated graphs.
         """
-        entry = blocks[0]
-        # assert not entry.preds, "non-entry node as first item in blocks"
+        alpha = blocks[0]
 
         # assume everything is dominated by everything
         doms = {b: set(blocks) for b in blocks}
-        doms[entry] = {entry}  # except entry, which is only dominated by itself
+        doms[alpha] = {alpha}  # except entry, which is only dominated by itself
         changed = True
         iters = 0
         while changed:  # loop until there are no updates to the tree
             iters += 1
             changed = False
             for k, v in doms.items():
-                if k == entry:
+                if k == alpha:
                     # entry only dominates itself by definition; no need to update.
                     continue
                 preds = k.preds
                 if not preds:
                     continue
                 # find common dominators of this node's predecessors
-                new_doms = set.intersection(*(doms[p] for p in preds))
+                new_doms = {k} | set.intersection(*(doms[p] for p in preds))
                 if new_doms != v:
                     doms[k] = new_doms
                     changed = True
@@ -281,13 +295,19 @@ class Decompiler:
         leaves = [b for b in blocks if not b.succs]
 
         copies = {b: _CfgBlock(b.instructions, [], []) for b in blocks}
-        synthetic_exit = _CfgBlock([], [copies[l] for l in leaves], [])
-        result: list[_CfgBlock] = [synthetic_exit]
+        omega = _CfgBlock([], [], [copies[l] for l in leaves])
+        result: list[_CfgBlock] = [omega]
+
         for b in blocks:
             copy = copies[b]
-            copy.preds = [copies[p] for p in b.preds]
-            copy.succs = [copies[s] for s in b.succs]
+            copy.succs = [copies[p] for p in b.preds]
+            copy.preds = [copies[s] for s in b.succs]
             result.append(copy)
+
+        for l in leaves:
+            # link the exit node as the predecessor of all (copied) leaf nodes
+            copies[l].preds.append(omega)
+
         return result
 
     def _decompile(self, blocks: list[_CfgBlock]) -> list[STStatement]:
@@ -295,8 +315,8 @@ class Decompiler:
         self._labels = []
         self._locals = {}
 
-        entry = blocks[0]
-        return self._decomp_region(entry)
+        alpha = blocks[0]
+        return self._decomp_region(alpha)
 
     def _decomp_region(
         self, in_block: _CfgBlock, stop: _CfgBlock | None = None
@@ -308,7 +328,7 @@ class Decompiler:
             term = block.instructions[-1]
             if term.opcode is Opcode.RET:
                 block = None
-            elif term.opcode in self._BRANCH:
+            elif term.opcode is Opcode.JZ:
                 block = self._decomp_cond(block, stmts)
             else:
                 block = block.succs[0] if block.succs else None
@@ -317,7 +337,7 @@ class Decompiler:
     def _decomp_cond(
         self, block: _CfgBlock, stmts: list[STStatement]
     ) -> _CfgBlock | None:
-        # assert len(block.succs) == 2, "cond node must have exactly 2 successors"
+        assert len(block.succs) == 2, "cond node must have exactly 2 successors"
         taken, fallthrough = block.succs
         merge = self._postdom[block]
         cond = self._make_expr(Register.AX)
