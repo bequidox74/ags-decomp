@@ -10,8 +10,11 @@ def verify(cond: bool, *args) -> None:
         raise AssertionError(*args)
 
 
-def sjoin(joiner: str, it: Iterable):
-    return joiner.join(str(x) for x in it)
+def sjoin(joiner: str, *args):
+    if len(args) == 1 and isinstance(args[0], list):
+        return joiner.join(str(x) for x in args[0])
+    else:
+        return joiner.join(str(x) for x in args)
 
 
 def quote(s: str) -> str:

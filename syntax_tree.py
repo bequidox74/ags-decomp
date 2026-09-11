@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Literal, Self
 
 from string_writer import StringWriter
 
@@ -147,6 +147,48 @@ class STAssignmentTarget(AST):
 
 
 @dataclass
+class STBlock(AST):
+    statements: list[STStatement]
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.append(" {")
+        sw.println()
+        sw.indent()
+        for s in self.statements:
+            s.emit(sw)
+            sw.append(";")
+            sw.println()
+        sw.dedent()
+        sw.println("}")
+
+
+@dataclass
+class STReturn(STStatement):
+    expr: STExpression
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print("return ")
+        self.expr.emit(sw)
+
+
+@dataclass
+class STIfStatement(STStatement):
+    cond: STExpression
+    then: STBlock
+    else_: Self | STBlock | None
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print("if (")
+        self.cond.emit(sw)
+        sw.print(") ")
+        self.then.emit(sw)
+
+        if self.else_ is not None:
+            sw.print(" else ")
+            self.else_.emit(sw)
+
+
+@dataclass
 class STVarAssignTarget(STAssignmentTarget):
     name: str
     array_index: STExpression | None
@@ -168,11 +210,9 @@ class STAssignment(STStatement):
     rhs: STExpression
 
     def emit(self, sw: StringWriter) -> None:
-        sw.print()
         self.lhs.emit(sw)
         sw.append(" = ")
         self.rhs.emit(sw)
-        sw.append(";")
 
 
 @dataclass
@@ -181,14 +221,12 @@ class STVarDeclaration(STStatement, STItem):
     name: str
 
     def emit(self, sw: StringWriter) -> None:
-        sw.print()
         self.type_.emit(sw)
         sw.append(f" {self.name}")
         if self.type_.array_size is not None:
             sw.append("[")
             sw.append(str(self.type_.array_size))
             sw.append("]")
-        sw.append(";")
 
 
 @dataclass
@@ -202,13 +240,8 @@ class STFunction(STItem):
     type_: STType | Literal["function"]
     name: str
     parameters: list[STFunctionParam]
-    statements: list[STStatement]
+    body: STBlock
 
     def emit(self, sw: StringWriter) -> None:
-        sw.println(f"function {self.name}(/* TODO */) {{")
-        sw.indent()
-        for stmt in self.statements:
-            stmt.emit(sw)
-            sw.println()
-        sw.dedent()
-        sw.println("}")
+        sw.print(f"function {self.name}(/* TODO */)")
+        self.body.emit(sw)

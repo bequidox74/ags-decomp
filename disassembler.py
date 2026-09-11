@@ -209,6 +209,9 @@ class Instruction:
             result.append(fmt_params)
         return " ".join(result)
 
+    def __repr__(self) -> str:
+        return f"<Instruction '{self}'>"
+
 
 class Function(NamedTuple):
     name: str
