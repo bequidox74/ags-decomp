@@ -3,7 +3,7 @@ from __future__ import annotations
 import gc
 import logging
 from dataclasses import field
-from typing import ClassVar, Self
+from typing import ClassVar, Final, Self
 
 from disassembler import *
 from syntax_tree import *
@@ -17,6 +17,8 @@ type _WriteTarget = Literal["local", "script", "global", "array"]
 type _Dominators = dict[_CfgBlock, set[_CfgBlock]]
 
 logger = logging.getLogger(__name__)
+
+_DIAGNOSTICS: Final = True
 
 
 @dataclass
@@ -118,6 +120,7 @@ class Decompiler:
         self._counters: dict[str, int] = {}
 
         self._max_doms_iters = 0
+        self._cfg_node_count: list[tuple[str, int]]
 
         self._stack: list
         self._statements: list[STStatement]
@@ -138,19 +141,28 @@ class Decompiler:
         self._build_script()
 
     def _build_cfg(self) -> None:
+        self._max_doms_iters = 0
+        self._cfg_node_count = []
+
         # all our entry points are given as function names in the exports table.
         for func in self.dis.functions:
             logger.debug("building CFG for func %s$%s", func.name, func.nargs)
             leaders = self._find_leaders(func)
             blocks = self._build_blocks(func.instructions, leaders)
             self._link_blocks(blocks)
+            self._cfg_node_count.append((func.name, len(blocks)))
 
             blocks = list(blocks.values())
             reverse_blocks = self._reverse_cfg(blocks)
             predoms = self._find_dominators(blocks)
             postdoms = self._find_dominators(reverse_blocks)
 
-        logger.debug("max domtree iterations: %d", self._max_doms_iters)
+        if _DIAGNOSTICS:
+            logger.info("max domtree iterations: %d", self._max_doms_iters)
+            logger.info(
+                "most CFG nodes: %s",
+                sorted(self._cfg_node_count, key=lambda x: x[1], reverse=True)[:3],
+            )
         gc.collect()  # force a GC to release unused memory
 
     def _find_leaders(self, func: Function) -> _Leaders:

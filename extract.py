@@ -1,9 +1,12 @@
+import logging
 import os
 from pathlib import Path
 from typing import NamedTuple
 
 from binary_reader import BinaryReader, Source
 from utils import verify
+
+logger = logging.getLogger(__name__)
 
 CLIB_START_SIG = b"CLIB\x1a"
 
@@ -77,13 +80,15 @@ def _extract_scripts(
         if verify_version is not None:
             br.seek(start + len(SCOM_START_SIG))
             version = br.u32()
-            verify(version == verify_version)
+            if version != verify_version:
+                continue
         out_file = out_dir / f"script{i}{extension}"
         out.append(out_file)
         with open(out_file, "wb") as handle:
             handle.write(script)
         if max_count is not None and i >= max_count:
             return out
+        logger.debug("extracted %s", out_file)
         i += 1
 
     return out

@@ -234,7 +234,7 @@ class Disassembly:
             self._read_scom(br)
         self._disassemble()
 
-    def format(self, sw: StringWriter | None = None) -> str:
+    def format(self, sw: StringWriter | None = None, fixups: bool = False) -> str:
         if sw is None:
             sw = StringWriter()
 
@@ -300,7 +300,7 @@ class Disassembly:
                 sw.println(f"{offset}: {export.name}{comment}")
             sw.println()
 
-        if self.fixups:
+        if fixups and self.fixups:
             sw.cr()
             sw.println(f".fixups[{len(self.fixups)}]")
             for idx, type_ in self.fixups.items():
