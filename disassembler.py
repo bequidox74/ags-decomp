@@ -230,7 +230,8 @@ class Disassembly:
 
         self._pc = 0
 
-        self._read_scom()
+        with BinaryReader(source) as br:
+            self._read_scom(br)
         self._disassemble()
 
     def format(self, sw: StringWriter | None = None) -> str:
@@ -317,9 +318,7 @@ class Disassembly:
     def __str__(self) -> str:
         return self.format()
 
-    def _read_scom(self) -> None:
-        br = BinaryReader(self.source)
-
+    def _read_scom(self, br: BinaryReader) -> None:
         assert br.read_fixed_string(4) == "SCOM", "Source is not a compiled AGS script"
         self.scom_version = br.u32()
         assert self.scom_version == 90, "Unsupported SCOM version"

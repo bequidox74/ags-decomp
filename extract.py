@@ -51,11 +51,21 @@ def extract_scripts(
     out_dir: Path,
     verify_version: int | None = 90,
     extension: str = ".o",
+    max_count: int | None = None,
+) -> list[Path]:
+    os.makedirs(out_dir, exist_ok=True)
+    with BinaryReader(data_file) as br:
+        return _extract_scripts(br, out_dir, verify_version, extension, max_count)
+
+
+def _extract_scripts(
+    br: BinaryReader,
+    out_dir: Path,
+    verify_version: int | None,
+    extension: str,
+    max_count: int | None,
 ) -> list[Path]:
     out: list[Path] = []
-    os.makedirs(out_dir, exist_ok=True)
-    br = BinaryReader(data_file)
-
     i = 1
     while (start := br.find(SCOM_START_SIG)) > 0:
         end = br.find(SCOM_END_SIG, start + len(SCOM_START_SIG)) + len(SCOM_END_SIG)
@@ -72,6 +82,8 @@ def extract_scripts(
         out.append(out_file)
         with open(out_file, "wb") as handle:
             handle.write(script)
+        if max_count is not None and i >= max_count:
+            return out
         i += 1
 
     return out
