@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import mmap
 import os
 import struct
 from pathlib import Path
@@ -60,28 +61,87 @@ class BinaryReader:
         return self.seek(count, io.SEEK_CUR)
 
     def find(self, needle: bytes, start: int | None = None) -> int:
+        if isinstance(self._stream, io.FileIO):
+            return self.find_file(needle, start)
+        return self.find_stream(needle, start)
+
+    def find_file(
+        self,
+        needle: bytes,
+        start: int | None = None,
+    ) -> int:
         """
-        Find bytes starting at `start` (or the current position).
+        Find bytes in a regular file starting at `start` (or the current position).
 
         Returns the absolute offset, or -1 if not found.
         Does not change the current position.
         """
         if not isinstance(needle, bytes):
             raise TypeError("needle must be bytes")
+        if not needle:
+            raise ValueError("needle must not be empty")
 
         current = self.tell()
         search_start = current if start is None else start
 
-        self._stream.seek(0, io.SEEK_END)
-        end = self._stream.tell()
+        try:
+            size = self._stream.seek(0, io.SEEK_END)
 
-        self._stream.seek(search_start)
-        data = self._stream.read(end - search_start)
+            if search_start < 0:
+                raise ValueError("start must not be negative")
+            if search_start > size:
+                return -1
 
-        result = data.find(needle)
+            with mmap.mmap(self._stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                result = data.find(needle, search_start)
+                return result
+        finally:
+            self._stream.seek(current)
 
-        self._stream.seek(current)
-        return -1 if result < 0 else search_start + result
+    def find_stream(
+        self,
+        needle: bytes,
+        start: int | None = None,
+        chunk_size: int = 64 * 1024,
+    ) -> int:
+        """
+        Find bytes in a stream using bounded memory.
+
+        Returns the absolute offset, or -1 if not found.
+        Does not change the current position.
+        """
+        if not isinstance(needle, bytes):
+            raise TypeError("needle must be bytes")
+        if not needle:
+            raise ValueError("needle must not be empty")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+
+        current = self.tell()
+        search_start = current if start is None else start
+
+        try:
+            self._stream.seek(search_start)
+
+            overlap = len(needle) - 1
+            previous = b""
+            offset = search_start
+
+            while True:
+                chunk = self._stream.read(chunk_size)
+                if not chunk:
+                    return -1
+
+                data = previous + chunk
+                result = data.find(needle)
+
+                if result != -1:
+                    return offset - len(previous) + result
+
+                previous = data[-overlap:] if overlap else b""
+                offset += len(chunk)
+        finally:
+            self._stream.seek(current)
 
     # ------------------------------------------------------------------
     # Raw bytes
