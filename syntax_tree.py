@@ -151,15 +151,14 @@ class STBlock(AST):
     statements: list[STStatement]
 
     def emit(self, sw: StringWriter) -> None:
-        sw.append(" {")
+        sw.append("{")
         sw.println()
         sw.indent()
         for s in self.statements:
             s.emit(sw)
-            sw.append(";")
             sw.println()
         sw.dedent()
-        sw.println("}")
+        sw.print("}")
 
 
 @dataclass
@@ -169,6 +168,7 @@ class STReturn(STStatement):
     def emit(self, sw: StringWriter) -> None:
         sw.print("return ")
         self.expr.emit(sw)
+        sw.print(";")
 
 
 @dataclass
@@ -186,6 +186,7 @@ class STIfStatement(STStatement):
         if self.else_ is not None:
             sw.print(" else ")
             self.else_.emit(sw)
+        sw.println()
 
 
 @dataclass
@@ -213,6 +214,7 @@ class STAssignment(STStatement):
         self.lhs.emit(sw)
         sw.append(" = ")
         self.rhs.emit(sw)
+        sw.print(";")
 
 
 @dataclass
@@ -243,5 +245,5 @@ class STFunction(STItem):
     body: STBlock
 
     def emit(self, sw: StringWriter) -> None:
-        sw.print(f"function {self.name}(/* TODO */)")
+        sw.print(f"function {self.name}(/* TODO */) ")
         self.body.emit(sw)
