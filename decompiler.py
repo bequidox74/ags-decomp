@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import dataclasses
+import gc
 import logging
 from dataclasses import field
 from typing import ClassVar, Self
@@ -149,7 +149,9 @@ class Decompiler:
             reverse_blocks = self._reverse_cfg(blocks)
             predoms = self._find_dominators(blocks)
             postdoms = self._find_dominators(reverse_blocks)
+
         logger.debug("max domtree iterations: %d", self._max_doms_iters)
+        gc.collect()  # force a GC to release unused memory
 
     def _find_leaders(self, func: Function) -> _Leaders:
         leaders: _Leaders = set()
