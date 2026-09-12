@@ -186,7 +186,6 @@ class STIfStatement(STStatement):
         if self.else_ is not None:
             sw.print(" else ")
             self.else_.emit(sw)
-        sw.println()
 
 
 @dataclass

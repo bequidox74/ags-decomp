@@ -236,9 +236,9 @@ class Decompiler:
             elif last.opcode in self._BRANCH:
                 label = last.params[0]
                 assert isinstance(label, Label)
+                block.link_to(blocks[label.to])
                 if i + 1 < len(addresses):
                     block.link_to(blocks[addresses[i + 1]])
-                block.link_to(blocks[label.to])
             elif last.opcode == Opcode.RET:
                 # return is the exit node, no linking here.
                 pass
