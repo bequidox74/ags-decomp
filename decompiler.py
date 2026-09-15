@@ -330,7 +330,7 @@ class Decompiler:
                 return stmts
             stmts.extend(self._decomp_block(block))
             term = block.instructions[-1]
-            if term.opcode is Opcode.RET:
+            if term.opcode is Opcode.RET or term.opcode is Opcode.JMP:
                 block = None
             elif term.opcode is Opcode.JZ:
                 block = self._decomp_cond(cfg, block, stmts)
