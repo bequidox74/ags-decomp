@@ -135,11 +135,7 @@ class Decompiler:
         Opcode.JZ,
         Opcode.JNZ,
     }
-
-    _TERMINATORS: ClassVar = {
-        Opcode.JZ,
-        Opcode.JNZ,
-    }
+    _TERMINATORS: ClassVar = _BRANCH | {Opcode.RET}
 
     _COUNTER_LOCAL: ClassVar[_WriteTarget] = "local"
     _COUNTER_SCRVAR: ClassVar[_WriteTarget] = "script"
@@ -149,6 +145,8 @@ class Decompiler:
 
     def __init__(self, dis: Disassembly) -> None:
         self.dis = dis
+        self.script: STScript
+
         self._stfuncs: list[STFunction] = []
         self._gdata = bytearray(self.dis.gdata)
         self._linenum = 0
@@ -158,16 +156,17 @@ class Decompiler:
         self._counters: dict[str, int] = {}
 
         self._max_doms_iters = 0
-        self._cfg_node_count: list[tuple[str, int]]
         self._emitted = []
 
-        self._dom: _IDomTree = {}
-        self._postdom: _IDomTree = {}
+        self._idom: _IDomTree = {}
+        self._ipostdom: _IDomTree = {}
 
         self._stack: list = []
         self._labels: list[Label] = []
         self._locals: dict[_MemOffset, _LocalVar] = {}
         self._svars: dict[_MemOffset, _ScriptVar] = {}
+        self._loops: set[_Block] = set()
+        self._loop_jumps: list[int] = []
 
         self._sp: int = 0
         self._mar: int | FixedUpValue | STBinaryExpression = 0
@@ -197,15 +196,20 @@ class Decompiler:
                 logger.debug("skipping empty function")
             else:
                 blocks_list = list(blocks.values())
+                blocks_list.append(omega)
                 reverse_cfg = cfg.reverse()
-                dom = self._find_dominators(blocks_list, cfg, blocks_list[0])
-                postdom = self._find_dominators(blocks_list, reverse_cfg, omega)
-                self._dom = self._idom_tree(dom)
-                self._postdom = self._idom_tree(postdom)
+                self._dom = self._find_dominators(blocks_list, cfg, blocks_list[0])
+                self._postdom = self._find_dominators(blocks_list, reverse_cfg, omega)
+                self._idom = self._idom_tree(self._dom)
+                self._ipostdom = self._idom_tree(self._postdom)
                 stmts = self._decompile(blocks_list, cfg)
 
             stblock = STBlock(stmts)
             stfunc = STFunction("function", func.name, [], stblock)
+            if stfunc.type_ == "function" and isinstance(stmts[-1], STReturn):
+                expr = stmts[-1].expr
+                if isinstance(expr, STLiteral) and expr.value == 0:
+                    stmts.pop()
             self._stfuncs.append(stfunc)
 
         if _DIAGNOSTICS:
@@ -252,12 +256,12 @@ class Decompiler:
         for i, address in enumerate(addresses):
             block = blocks[address]
             last = block.instructions[-1]
-            if last.opcode == Opcode.JMP or last.opcode in self._BRANCH:
+            if last.opcode is Opcode.JMP or last.opcode in self._BRANCH:
                 label = last.params[0]
                 assert isinstance(label, Label)
+                cfg.link(block, blocks[label.to])
                 if last.opcode in self._BRANCH and i + 1 < len(addresses):
                     cfg.link(block, blocks[addresses[i + 1]])
-                cfg.link(block, blocks[label.to])
             elif last.opcode == Opcode.RET:
                 pass  # return is the exit node, no linking here.
             else:  # fallthrough
@@ -316,9 +320,18 @@ class Decompiler:
         self._stack = []
         self._labels = []
         self._locals = {}
+        self._loops = self._find_loops(blocks, cfg)
 
         alpha = blocks[0]
         return self._decomp_region(cfg, alpha)
+
+    def _find_loops(self, blocks: list[_Block], cfg: _CFGraph) -> set[_Block]:
+        loops: set[_Block] = set()
+        for b in blocks:
+            for s in cfg.succs(b):
+                if s in self._dom[b]:
+                    loops.add(s)
+        return loops
 
     def _decomp_region(
         self, cfg: _CFGraph, in_block: _Block, stop: _Block | None = None
@@ -328,14 +341,28 @@ class Decompiler:
         while block is not None and block != stop:
             if not block.instructions:
                 return stmts
-            stmts.extend(self._decomp_block(block))
+            stmts.extend(self._emulate_block(block))
+
+            if block in self._loops:
+                block = self._decomp_loop(cfg, block, stmts)
+                continue
+
             term = block.instructions[-1]
-            if term.opcode is Opcode.RET or term.opcode is Opcode.JMP:
+            if term.opcode is Opcode.RET:
+                block = None
+            elif term.opcode is Opcode.JMP:
+                assert isinstance(term.params[0], Label)
+                label = term.params[0]
+                if self._loop_jumps and label.to == self._loop_jumps[-1]:
+                    # if jumping to a loop break, emit a break statement.
+                    stmts.append(STBreak())
                 block = None
             elif term.opcode is Opcode.JZ:
                 block = self._decomp_cond(cfg, block, stmts)
             else:
-                # block = block.succs[0] if block.succs else None
+                assert len(cfg.succs(block)) == 1, (
+                    "multiple successors for simple block"
+                )
                 block = cfg.succs(block)[0] if cfg.succs(block) else None
         return stmts
 
@@ -343,25 +370,55 @@ class Decompiler:
         self, cfg: _CFGraph, block: _Block, stmts: list[STStatement]
     ) -> _Block | None:
         assert len(cfg.succs(block)) == 2, "cond node must have exactly 2 successors"
-        taken, fallthrough = cfg.succs(block)
-        merge = self._postdom[block]
+        skipped, taken = cfg.succs(block)
+        merge = self._ipostdom[block]
         cond = self._make_expr(Register.AX)
 
-        if fallthrough == merge:
-            then = STBlock(self._decomp_region(cfg, taken, merge))
-            stmts.append(STIfStatement(cond, then, None))
-            return merge
         if taken == merge:
-            raise NotImplementedError
+            then = STBlock(self._decomp_region(cfg, skipped, merge))
+            stmts.append(STIf(cond, then, None))
+            return merge
+        if skipped == merge:
+            then = STBlock(self._decomp_region(cfg, taken, merge))
+            stmts.append(STIf(cond, then, None))
+            return merge
         else:
-            self._decomp_region(cfg, fallthrough, merge)
+            then = STBlock(self._decomp_region(cfg, taken, merge))
 
-        then = STBlock(self._decomp_region(cfg, taken, merge))
-        else_ = STBlock(self._decomp_region(cfg, fallthrough, merge))
-        stmts.append(STIfStatement(cond, then, else_))
-        return merge
+            else_stmts = self._decomp_region(cfg, skipped, merge)
+            if len(else_stmts) == 1 and isinstance(else_stmts[0], STIf):
+                else_ = else_stmts[0]
+            elif else_stmts:
+                else_ = STBlock(else_stmts)
+            else:
+                else_ = None
 
-    def _decomp_block(self, block: _Block) -> list[STStatement]:
+            stmts.append(STIf(cond, then, else_))
+            return merge
+
+    def _decomp_loop(
+        self, cfg: _CFGraph, block: _Block, stmts: list[STStatement]
+    ) -> _Block | None:
+        succs = cfg.succs(block)
+        if len(succs) == 1:
+            # break
+            block = succs[0]
+            self._loop_jumps.append(block.instructions[0].offset)
+        else:
+            # cond + body
+            assert len(succs) == 2
+        body = cfg.succs(block)[1]
+        after = self._ipostdom[block]
+
+        cond = self._make_expr(Register.AX)
+        body_stmts = self._decomp_region(cfg, body, after)
+        body = STBlock(body_stmts)
+
+        while_ = STWhile(cond, body)
+        stmts.append(while_)
+        return after
+
+    def _emulate_block(self, block: _Block) -> list[STStatement]:
         stmts: list[STStatement] = []
         for inst in block.instructions:
             if isinstance(inst, Label):

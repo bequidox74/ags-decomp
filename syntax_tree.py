@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Self
+from typing import Literal
 
 from string_writer import StringWriter
 
@@ -147,7 +147,7 @@ class STAssignmentTarget(AST):
 
 
 @dataclass
-class STBlock(AST):
+class STBlock(STStatement):
     statements: list[STStatement]
 
     def emit(self, sw: StringWriter) -> None:
@@ -172,10 +172,10 @@ class STReturn(STStatement):
 
 
 @dataclass
-class STIfStatement(STStatement):
+class STIf(STStatement):
     cond: STExpression
     then: STBlock
-    else_: Self | STBlock | None
+    else_: STIf | STBlock | None
 
     def emit(self, sw: StringWriter) -> None:
         sw.print("if (")
@@ -186,6 +186,23 @@ class STIfStatement(STStatement):
         if self.else_ is not None:
             sw.print(" else ")
             self.else_.emit(sw)
+
+
+@dataclass
+class STWhile(STStatement):
+    cond: STExpression
+    body: STBlock
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print("while (")
+        self.cond.emit(sw)
+        sw.print(") ")
+        self.body.emit(sw)
+
+
+class STBreak(STStatement):
+    def emit(self, sw: StringWriter) -> None:
+        sw.print("break;")
 
 
 @dataclass
