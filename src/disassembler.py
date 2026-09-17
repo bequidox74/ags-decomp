@@ -169,9 +169,13 @@ class Label(Parameter):
 
 @dataclass
 class Instruction:
+    class Offset(NamedTuple):
+        script: int
+        func: int
+
     opcode: Opcode
     params: list[Parameter]
-    offset: int
+    offset: Instruction.Offset
     idx: int
 
     def as_reg(self, idx: int) -> Register:
@@ -229,7 +233,7 @@ class Disassembly:
         self.code: list[int] = []
         self.jumps: dict[int, set[Label]] = {}  # dict[destination, labels]
 
-        self._pc = 0
+        self._offset = 0
 
         with BinaryReader(source) as br:
             self._read_scom(br)
@@ -252,7 +256,7 @@ class Disassembly:
             sw.dedent()
             sw.println()
 
-        self._pc = 0
+        self._offset = 0
         if self.functions:
             sw.cr()
             sw.println(f".code[{self.code_size}]")
@@ -261,10 +265,10 @@ class Disassembly:
                 sw.indent()
                 sw.indent()
                 for item in func.instructions:
-                    if self._pc in self.jumps:
+                    if self._offset in self.jumps:
                         old_level = sw.level
                         sw.cr()
-                        sw.println(f"L{self._pc}_{func.name}:")
+                        sw.println(f"L{self._offset}_{func.name}:")
                         sw.level = old_level
 
                     is_linenum = item.opcode == Opcode.LINENUM
@@ -273,7 +277,7 @@ class Disassembly:
                     sw.println(str(item))
                     if is_linenum:
                         sw.indent()
-                    self._pc += 1 + len(item.params)
+                    self._offset += 1 + len(item.params)
                 sw.dedent()
                 sw.dedent()
                 sw.println()
@@ -406,25 +410,32 @@ class Disassembly:
         instructions: list[Instruction] = []
         lookup: dict[int, Instruction] = {}
 
-        self._pc = start
+        self._offset = start
+        pc = 0
         idx = 0
-        while self._pc < end:
-            opcode = Opcode(self.code[self._pc])
-            instr = self._process_opcode(idx, self._pc, opcode, name)
+        while self._offset < end:
+            opcode = Opcode(self.code[self._offset])
+            instr = self._process_opcode(idx, pc, opcode, name)
             instructions.append(instr)
-            lookup[self._pc] = instr
-            self._pc += 1 + opcode.nargs
+            lookup[self._offset] = instr
+
+            dpc = 1 + opcode.nargs
+            self._offset += dpc
+            pc += dpc
             idx += 1
 
         return Function(name, nargs, start, instructions, lookup)
 
     def _process_opcode(
-        self, idx: int, offset: int, opcode: Opcode, func_name: str
+        self, idx: int, pc: int, opcode: Opcode, func_name: str
     ) -> Instruction:
+        offset = Instruction.Offset(self._offset, pc)
         match opcode:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
-                from_ = offset
-                to = offset + 2 + self.code[offset + 1]  # + 2 to skip our args
+                from_ = self._offset
+                to = (
+                    self._offset + 2 + self.code[self._offset + 1]
+                )  # + 2 to skip our args
                 labels = self.jumps.setdefault(to, set())
                 label = Label(from_, to, func_name)
                 label.count += 1
@@ -436,7 +447,7 @@ class Disassembly:
 
         params: list[Parameter] = []
         for i, f in enumerate(opcode.args_format):
-            arg_idx = offset + i + 1
+            arg_idx = self._offset + i + 1
             arg = self.code[arg_idx]
             match f:
                 case "r":  # register
