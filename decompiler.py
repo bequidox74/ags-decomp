@@ -512,7 +512,12 @@ class Decompiler:
                 r = inst.as_reg(0)
                 self._exec_varexpr(4, r)
             elif opc is Opcode.CALL:
-                pass
+                r = inst.as_reg(0)
+                v = self._getr(r)
+                assert isinstance(v, FixedUpValue)
+                assert v.type_ is FixupType.FUNCTION
+                v = v.original
+                stmts.append(STFuncCall(self.dis.func_index[v].name, []))
             elif opc is Opcode.RET:
                 ret = self._make_expr(Register.AX)
                 stmts.append(STReturn(ret))

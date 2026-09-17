@@ -228,6 +228,7 @@ class Disassembly:
     def __init__(self, source) -> None:
         self.source = source
         self.functions: list[Function] = []
+        self.func_index: dict[int, Function] = {}
         self.gdata: bytes = b""
         self.gdata_offset = 0
         self.scom_version: int = 90
@@ -400,6 +401,7 @@ class Disassembly:
 
         for s, e in ranges:
             func = self._dis_function(s, e)
+            self.func_index[func.offset] = func
             self.functions.append(func)
 
     def _dis_function(self, start: int, end: int) -> Function:

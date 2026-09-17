@@ -264,3 +264,18 @@ class STFunction(STItem):
         sw.print(f"function {self.name}(/* TODO */) ")
         self.body.emit(sw)
         sw.println()
+
+
+@dataclass
+class STFuncCall(STStatement):
+    name: str
+    params: list[STExpression]
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print(self.name)
+        sw.print("(")
+        for i, p in enumerate(self.params):
+            p.emit(sw)
+            if i != len(self.params) - 1:
+                sw.print(", ")
+        sw.print(");")
