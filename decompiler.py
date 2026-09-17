@@ -434,16 +434,16 @@ class Decompiler:
                 expr = STBinaryExpression(a, b, self._BINOPS[opc])
                 self._setr(ra, expr)
 
-                if ra == Register.MAR and rb == Register.CX:
+                if ra is Register.MAR and rb is Register.CX:
                     # array index, CX will hold an expression at this point
                     self._write_target = "array"
             elif opc in self._BINOPS_LITERAL:
                 r = inst.as_reg(0)
                 v = inst.as_int(1)
-                if r == Register.SP:  # offsets only
-                    if opc == Opcode.ADD:
+                if r is Register.SP:  # offsets only
+                    if opc is Opcode.ADD:
                         self._sp += v
-                    elif opc == Opcode.SUB:
+                    elif opc is Opcode.SUB:
                         self._sp -= v
                     else:
                         raise AssertionError
@@ -452,66 +452,68 @@ class Decompiler:
                     right = STLiteral(v)
                     expr = STBinaryExpression(left, right, self._BINOPS_LITERAL[opc])
                     self._setr(r, expr)
-            elif opc == Opcode.LINENUM:
+            elif opc is Opcode.LINENUM:
                 self._linenum = inst.as_int(0)
-            elif opc == Opcode.THISBASE:
+            elif opc is Opcode.THISBASE:
                 self._thisbase = inst.as_int(0)
-            elif opc == Opcode.PUSHREG:
+            elif opc is Opcode.PUSHREG:
                 rv = self._getr(inst.as_reg(0))
                 self._stack.append(rv)
-            elif opc == Opcode.POPREG:
+            elif opc is Opcode.POPREG:
                 rv = inst.as_reg(0)
                 v = self._stack.pop()
                 self._setr(rv, v)
-            elif opc == Opcode.REGTOREG:  # R1 -> R2
+            elif opc is Opcode.REGTOREG:  # R1 -> R2
                 rs = inst.as_reg(0)
                 rd = inst.as_reg(1)
                 self._setr(rd, self._getr(rs))
 
-                if rs == Register.SP and rd == Register.MAR:
+                if rs is Register.SP and rd is Register.MAR:
                     # local vars are written using SP
                     self._write_target = "local"
-            elif opc == Opcode.LITTOREG:  # R <- A
+            elif opc is Opcode.LITTOREG:  # R <- A
                 reg = inst.as_reg(0)
                 v = inst.as_fup(1)
                 self._setr(reg, v)
 
-                if reg == Register.MAR:
-                    if v.type_ == FixupType.GLOBAL_DATA:
+                if reg is Register.MAR:
+                    if v.type_ is FixupType.GLOBAL_DATA:
                         # top-level script var
                         self._write_target = "script"
-                    elif v.type_ == FixupType.IMPORT:
+                    elif v.type_ is FixupType.IMPORT:
                         # true global var
                         self._write_target = "global"
-            elif opc == Opcode.LOADSPOFFS:
+            elif opc is Opcode.LOADSPOFFS:
                 offset = inst.as_int(0)
                 self._mar = self._sp - offset
                 assert self._mar >= 0
                 self._write_target = "local"  # writing to stack, so must be a local
-            elif opc == Opcode.ZEROMEMORY:
+            elif opc is Opcode.ZEROMEMORY:
                 size = inst.as_int(0)
                 self._emit_vardecl(size)
-            elif opc == Opcode.MEMWRITEB:
+            elif opc is Opcode.MEMWRITEB:
                 stmts.append(self._emit_assign(inst, 1))
-            elif opc == Opcode.MEMWRITEW:
+            elif opc is Opcode.MEMWRITEW:
                 stmts.append(self._emit_assign(inst, 2))
-            elif opc == Opcode.MEMWRITE:
+            elif opc is Opcode.MEMWRITE:
                 stmts.append(self._emit_assign(inst, 4))
-            elif opc == Opcode.CHECKBOUNDS:
+            elif opc is Opcode.CHECKBOUNDS:
                 r = inst.as_reg(0)
-                assert r == Register.AX  # i'm not sure if this is always the case
+                assert r is Register.AX  # i'm not sure if this is always the case
                 v = inst.as_int(1)
                 self._array_item_count = v
-            elif opc == Opcode.MEMREADB:
+            elif opc is Opcode.MEMREADB:
                 r = inst.as_reg(0)
                 self._exec_varexpr(1, r)
-            elif opc == Opcode.MEMREADW:
+            elif opc is Opcode.MEMREADW:
                 r = inst.as_reg(0)
                 self._exec_varexpr(2, r)
-            elif opc == Opcode.MEMREAD:
+            elif opc is Opcode.MEMREAD:
                 r = inst.as_reg(0)
                 self._exec_varexpr(4, r)
-            elif opc == Opcode.RET:
+            elif opc is Opcode.CALL:
+                pass
+            elif opc is Opcode.RET:
                 ret = self._make_expr(Register.AX)
                 stmts.append(STReturn(ret))
             else:
