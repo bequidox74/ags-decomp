@@ -3,13 +3,15 @@ from __future__ import annotations
 import enum
 import itertools
 from dataclasses import dataclass
-from typing import NamedTuple, TypeAlias
+from enum import Enum, IntEnum
+from typing import NamedTuple
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
 from utils import format_bindata, quote
 
-Primitive: TypeAlias = int | str | float
+type Primitive = int | str | float
+type Parameter = FixedUpValue | Label | Register
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
@@ -101,7 +103,7 @@ class Opcode(enum.Enum):
         return obj
 
 
-class FixupType(enum.IntEnum):
+class FixupType(IntEnum):
     NO_FIXUP = 0
     GLOBAL_DATA = 1
     FUNCTION = 2
@@ -121,11 +123,7 @@ class Section(NamedTuple):
     offset: int
 
 
-class Parameter:
-    pass
-
-
-class Register(Parameter, enum.Enum):
+class Register(Enum):
     SP = 1
     MAR = 2
     AX = 3
@@ -139,7 +137,7 @@ class Register(Parameter, enum.Enum):
 
 
 @dataclass
-class FixedUpValue(Parameter):
+class FixedUpValue:
     original: int
     fixed: Primitive | None = None
     type_: FixupType = FixupType.NO_FIXUP
@@ -157,7 +155,7 @@ class FixedUpValue(Parameter):
 
 
 @dataclass(unsafe_hash=True)
-class Label(Parameter):
+class Label:
     from_: int
     to: int
     func_name: str
@@ -171,12 +169,17 @@ class Label(Parameter):
 class Instruction:
     class Offset(NamedTuple):
         script: int
+        """Offset relative to the .code block (bytes)"""
+
         func: int
+        """Offset relative to function start (bytes)"""
+
+        idx: int
+        """Index of instruction in function"""
 
     opcode: Opcode
     params: list[Parameter]
     offset: Instruction.Offset
-    idx: int
 
     def as_reg(self, idx: int) -> Register:
         reg = self.params[idx]
@@ -429,7 +432,7 @@ class Disassembly:
     def _process_opcode(
         self, idx: int, pc: int, opcode: Opcode, func_name: str
     ) -> Instruction:
-        offset = Instruction.Offset(self._offset, pc)
+        offset = Instruction.Offset(self._offset, pc, idx)
         match opcode:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
                 from_ = self._offset
@@ -440,7 +443,7 @@ class Disassembly:
                 label = Label(from_, to, func_name)
                 label.count += 1
                 labels.add(label)
-                inst = Instruction(opcode, [label], offset, idx)
+                inst = Instruction(opcode, [label], offset)
                 return inst
             case _:
                 pass
@@ -490,4 +493,4 @@ class Disassembly:
                             )
                         )
 
-        return Instruction(opcode, params, offset, idx)
+        return Instruction(opcode, params, offset)
