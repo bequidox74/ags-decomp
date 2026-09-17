@@ -156,21 +156,15 @@ class FixedUpValue(Parameter):
                 return str(self.original)
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class Label(Parameter):
     from_: int
     to: int
     func_name: str
     count: int = 0
 
-    def as_param(self) -> str:
-        return f"L{self.to}_{self.func_name}"
-
-    def as_label(self) -> str:
-        return f"L{self.to}_{self.func_name}: ; {self.count} references"
-
     def __str__(self) -> str:
-        return self.as_param()
+        return f"L{self.to}_{self.func_name} ; {self.to - self.from_}"
 
 
 @dataclass
@@ -197,7 +191,7 @@ class Instruction:
         if type_ is not None:
             assert fup.type_ == type_
         return fup
-    
+
     def __post_init__(self) -> None:
         assert len(self.params) <= 3
 
@@ -233,7 +227,7 @@ class Disassembly:
         self.gdata_offset = 0
         self.scom_version: int = 90
         self.code: list[int] = []
-        self.jumps: dict[int, Label] = {}  # dict[dst, label]
+        self.jumps: dict[int, set[Label]] = {}  # dict[destination, labels]
 
         self._pc = 0
 
@@ -258,19 +252,19 @@ class Disassembly:
             sw.dedent()
             sw.println()
 
+        self._pc = 0
         if self.functions:
             sw.cr()
             sw.println(f".code[{self.code_size}]")
             for func in self.functions:
-                pc = 0
                 sw.println(f"{func.name}${func.nargs}: ; @{func.offset}")
                 sw.indent()
                 sw.indent()
                 for item in func.instructions:
-                    if pc in self.jumps:
+                    if self._pc in self.jumps:
                         old_level = sw.level
                         sw.cr()
-                        sw.println(self.jumps[pc].as_label())
+                        sw.println(f"L{self._pc}_{func.name}:")
                         sw.level = old_level
 
                     is_linenum = item.opcode == Opcode.LINENUM
@@ -279,7 +273,7 @@ class Disassembly:
                     sw.println(str(item))
                     if is_linenum:
                         sw.indent()
-                    pc += 1 + len(item.params)
+                    self._pc += 1 + len(item.params)
                 sw.dedent()
                 sw.dedent()
                 sw.println()
@@ -431,9 +425,10 @@ class Disassembly:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
                 from_ = offset
                 to = offset + 2 + self.code[offset + 1]  # + 2 to skip our args
-                label = self.jumps.get(to, Label(from_, to, func_name))
+                labels = self.jumps.setdefault(to, set())
+                label = Label(from_, to, func_name)
                 label.count += 1
-                self.jumps[to] = label
+                labels.add(label)
                 inst = Instruction(opcode, [label], offset, idx)
                 return inst
             case _:
