@@ -4,7 +4,7 @@ import enum
 import itertools
 from dataclasses import dataclass
 from enum import Enum, IntEnum
-from typing import NamedTuple
+from typing import Annotated, NamedTuple
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
@@ -234,7 +234,7 @@ class Disassembly:
         self.gdata_offset = 0
         self.scom_version: int = 90
         self.code: list[int] = []
-        self.jumps: dict[int, set[Label]] = {}  # dict[destination, labels]
+        self.jumps: dict[Annotated[int, "destination"], set[Label]] = {}
 
         self._offset = 0
 
