@@ -248,7 +248,7 @@ class Decompiler:
             current.append(inst)
         if current:
             blocks.append(current)
-        return {b[0].offset: _Block(b) for b in blocks}
+        return {b[0].offset.script: _Block(b) for b in blocks}
 
     def _link_blocks(self, blocks: _CodeBlocks) -> tuple[_CFGraph, _Block]:
         cfg = _CFGraph()
@@ -403,7 +403,7 @@ class Decompiler:
         if len(succs) == 1:
             # break
             block = succs[0]
-            self._loop_jumps.append(block.instructions[0].offset)
+            self._loop_jumps.append(block.instructions[0].offset.script)
         else:
             # cond + body
             assert len(succs) == 2
