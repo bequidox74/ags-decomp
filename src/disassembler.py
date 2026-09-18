@@ -277,7 +277,8 @@ class Disassembly:
                     if self._offset in self.jumps:
                         old_level = sw.level
                         sw.cr()
-                        sw.println(f"L{self._offset}_{func.name}:")
+                        njumps = len(self.jumps[self._offset])
+                        sw.println(f"L{self._offset}_{func.name}: ; {njumps} references")
                         sw.level = old_level
 
                     is_linenum = item.opcode == Opcode.LINENUM
