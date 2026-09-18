@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import ClassVar
 
 from disassembler import Disassembly, Function, Instruction, Label, Opcode
 from syntax_tree import STFunction, STScript
+
+debug: bool = True  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
+logger.disabled = not debug
 
 
 @dataclass(init=False)
@@ -30,6 +35,14 @@ class _Block:
 
     def __eq__(self, value: object) -> bool:
         return self is value
+
+    def __repr__(self) -> str:
+        if self.ins:
+            first = str(self.ins[0])
+            last = str(self.ins[-1])
+            return f"<Block {first}..{last}>"
+        else:
+            return "<Block>"
 
 
 @dataclass
@@ -86,10 +99,14 @@ class Decompiler:
         self.script = self._make_script(funcs)
 
     def _do_func(self, func: Function) -> STFunction:
+        logger.info("decompiling %s", func.mangled_name)
         fs = _FuncState(func)
+
+        logger.debug("building CFG")
         self._find_leaders(fs)
         self._build_blocks(fs)
         self._link_blocks(fs)
+
         return STFunction(func.name)
 
     def _find_leaders(self, fs: _FuncState) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import itertools
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from enum import Enum, IntEnum
 from typing import Annotated, NamedTuple
 
@@ -214,15 +214,21 @@ class Instruction:
         return " ".join(result)
 
     def __repr__(self) -> str:
-        return f"<Instruction '{self}'>"
+        return f"<Instruction {self}>"
 
 
-class Function(NamedTuple):
+@dataclass
+class Function:
     name: str
     nargs: int
     offset: int
     instructions: list[Instruction]
     lookup: dict[int, Instruction]
+
+    mangled_name: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.mangled_name = f"{self.name}${self.nargs}"
 
 
 class Disassembly:
