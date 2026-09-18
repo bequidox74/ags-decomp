@@ -7,6 +7,20 @@ from disassembler import Disassembly, Function, Instruction, Label, Opcode
 from syntax_tree import STFunction, STScript
 
 
+@dataclass(init=False)
+class _FuncState:
+    func: Function
+    leaders: set[Instruction]
+    blocks: dict[int, _Block]
+
+    cfg: _CFGraph
+    alpha: _Block
+    omega: _Block
+
+    def __init__(self, func: Function) -> None:
+        self.func = func
+
+
 @dataclass
 class _Block:
     ins: list[Instruction]
@@ -51,19 +65,6 @@ class _CFGraph:
 
 
 class Decompiler:
-    @dataclass(init=False)
-    class _FuncState:
-        func: Function
-        leaders: set[Instruction]
-        blocks: dict[int, _Block]
-
-        cfg: _CFGraph
-        alpha: _Block
-        omega: _Block
-
-        def __init__(self, func: Function) -> None:
-            self.func = func
-
     _BRANCH: ClassVar[set[Opcode]] = {
         Opcode.JMP,
         Opcode.JZ,
@@ -85,13 +86,13 @@ class Decompiler:
         self.script = self._make_script(funcs)
 
     def _do_func(self, func: Function) -> STFunction:
-        fs = self._FuncState(func)
+        fs = _FuncState(func)
         self._find_leaders(fs)
         self._build_blocks(fs)
         self._link_blocks(fs)
         return STFunction(func.name)
 
-    def _find_leaders(self, fs: Decompiler._FuncState) -> None:
+    def _find_leaders(self, fs: _FuncState) -> None:
         func = fs.func
         leaders: set[Instruction] = set()
         fs.leaders = leaders
@@ -109,7 +110,7 @@ class Decompiler:
 
         assert len(leaders) > 0, "function must have at least one leader"
 
-    def _build_blocks(self, fs: Decompiler._FuncState) -> None:
+    def _build_blocks(self, fs: _FuncState) -> None:
         blocks: list[list[Instruction]] = []
 
         current: list[Instruction] = []
@@ -124,7 +125,7 @@ class Decompiler:
         assert len(blocks) > 0, "function must have at least one block"
         fs.blocks = {b[0].offset.script: _Block(b) for b in blocks}
 
-    def _link_blocks(self, fs: Decompiler._FuncState) -> None:
+    def _link_blocks(self, fs: _FuncState) -> None:
         cfg = _CFGraph()
 
         blocks = fs.blocks
