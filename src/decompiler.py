@@ -91,10 +91,10 @@ class Decompiler:
         self._link_blocks(fs)
         return STFunction(func.name)
 
-    def _find_leaders(self, fstate: Decompiler._FuncState) -> None:
-        func = fstate.func
+    def _find_leaders(self, fs: Decompiler._FuncState) -> None:
+        func = fs.func
         leaders: set[Instruction] = set()
-        fstate.leaders = leaders
+        fs.leaders = leaders
         if not func.instructions:
             return
 
@@ -109,12 +109,12 @@ class Decompiler:
 
         assert len(leaders) > 0, "function must have at least one leader"
 
-    def _build_blocks(self, fstate: Decompiler._FuncState) -> None:
+    def _build_blocks(self, fs: Decompiler._FuncState) -> None:
         blocks: list[list[Instruction]] = []
 
         current: list[Instruction] = []
-        for inst in fstate.func.instructions:
-            if inst in fstate.leaders and current:
+        for inst in fs.func.instructions:
+            if inst in fs.leaders and current:
                 blocks.append(current)
                 current = []
             current.append(inst)
@@ -122,12 +122,12 @@ class Decompiler:
             blocks.append(current)
 
         assert len(blocks) > 0, "function must have at least one block"
-        fstate.blocks = {b[0].offset.script: _Block(b) for b in blocks}
+        fs.blocks = {b[0].offset.script: _Block(b) for b in blocks}
 
-    def _link_blocks(self, fstate: Decompiler._FuncState) -> None:
+    def _link_blocks(self, fs: Decompiler._FuncState) -> None:
         cfg = _CFGraph()
 
-        blocks = fstate.blocks
+        blocks = fs.blocks
         addresses = sorted(blocks)
         for i, address in enumerate(addresses):
             block = blocks[address]
@@ -155,9 +155,9 @@ class Decompiler:
         for l in leaves:
             cfg.link(l, omega)
 
-        fstate.cfg = cfg
-        fstate.alpha = blocks[addresses[0]]
-        fstate.omega = omega
+        fs.cfg = cfg
+        fs.alpha = blocks[addresses[0]]
+        fs.omega = omega
 
     def _make_script(self, funcs: list[STFunction]) -> STScript:
         return STScript(funcs)
