@@ -11,16 +11,28 @@ debug: bool = True  # pylint: disable=invalid-name
 logger = logging.getLogger(__name__)
 logger.disabled = not debug
 
+type _Dominators = dict[_Block, set[_Block]]
+type _IDomTree = dict[_Block, _Block]
+
 
 @dataclass(init=False)
 class _FuncState:
     func: Function
     leaders: set[Instruction]
     blocks: dict[int, _Block]
+    blocks_list: list[_Block]
 
     cfg: _CFGraph
+    revcfg: _CFGraph
     alpha: _Block
     omega: _Block
+
+    dom: _Dominators
+    pdom: _Dominators
+    idom: _IDomTree
+    ipdom: _IDomTree
+
+    loop_headers: set[_Block]
 
     def __init__(self, func: Function) -> None:
         self.func = func
@@ -89,6 +101,8 @@ class Decompiler:
         self.disassembly = disassembly
         self.script: STScript
 
+        self._max_doms_iters: int = 0
+
         self._decompile()
 
     def _decompile(self) -> None:
@@ -106,6 +120,15 @@ class Decompiler:
         self._find_leaders(fs)
         self._build_blocks(fs)
         self._link_blocks(fs)
+
+        logger.debug("building domtrees")
+        fs.dom = self._dominators(fs.blocks_list, fs.cfg, fs.alpha)
+        fs.pdom = self._dominators(fs.blocks_list, fs.revcfg, fs.omega)
+        fs.idom = self._idom_tree(fs.dom)
+        fs.ipdom = self._idom_tree(fs.pdom)
+
+        logger.debug("building AST")
+        self._find_loop_headers(fs)
 
         return STFunction(func.name)
 
@@ -141,6 +164,7 @@ class Decompiler:
 
         assert len(blocks) > 0, "function must have at least one block"
         fs.blocks = {b[0].offset.script: _Block(b) for b in blocks}
+        fs.blocks_list = list(fs.blocks.values())
 
     def _link_blocks(self, fs: _FuncState) -> None:
         cfg = _CFGraph()
@@ -174,8 +198,55 @@ class Decompiler:
             cfg.link(l, omega)
 
         fs.cfg = cfg
+        fs.revcfg = fs.cfg.reverse()
         fs.alpha = blocks[addresses[0]]
         fs.omega = omega
+
+    def _dominators(
+        self, blocks: list[_Block], graph: _CFGraph, entry: _Block
+    ) -> _Dominators:
+        # worst case is quadratic; usually converges faster.
+        # initially, assume everything is dominated by everything.
+        doms = {b: set(blocks) for b in blocks}
+        doms[entry] = {entry}  # except entry, which is only dominated by itself
+        changed = True
+        iters = 0
+
+        while changed:  # loop until there are no updates to the tree
+            iters += 1
+            changed = False
+            for k, v in doms.items():
+                if k == entry:
+                    # entry only dominates itself by definition; no need to update.
+                    continue
+                preds = graph.preds(k)
+                if not preds:
+                    continue
+
+                # find common dominators of this node's predecessors
+                new_doms = {k} | set.intersection(*(doms[p] for p in preds))
+                if new_doms != v:
+                    doms[k] = new_doms
+                    changed = True
+
+        self._max_doms_iters = max(self._max_doms_iters, iters)
+        return doms
+
+    def _idom_tree(self, doms: _Dominators) -> _IDomTree:
+        idom = {}
+        for bl, dset in doms.items():
+            strict = dset - {bl}
+            if strict:
+                idom[bl] = max(strict, key=lambda x: len(doms[x]))
+        return idom
+
+    def _find_loop_headers(self, fs: _FuncState) -> None:
+        loops: set[_Block] = set()
+        fs.loop_headers = loops
+        for b in fs.blocks_list:
+            for s in fs.cfg.succs(b):
+                if s in fs.dom[b]:
+                    loops.add(s)
 
     def _make_script(self, funcs: list[STFunction]) -> STScript:
         return STScript(funcs)
