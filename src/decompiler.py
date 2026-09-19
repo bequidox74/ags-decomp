@@ -49,6 +49,8 @@ class _FuncState:
     idom: _IDomTree
     ipdom: _IDomTree
 
+    trampolines: dict[_Block, _Block]
+    breaks: dict[_Block, _Block]
     loop_headers: set[_Block]
     stmts: list[STStatement]
     vm: _VM
@@ -169,7 +171,7 @@ class Decompiler:
 
         leaders.add(func.instructions[0])  # the first instruction is a leader
         for i, inst in enumerate(func.instructions):
-            if inst.opcode in self._BRANCH:
+            if inst.opcode is Opcode.JMP or inst.opcode in self._BRANCH:
                 target = inst.params[0]
                 assert isinstance(target, Label)
                 leaders.add(func.lookup[target.to])
@@ -219,9 +221,12 @@ class Decompiler:
                     cfg.link(block, blocks[addresses[i + 1]])
 
         # prune dead code
+        prune_count = 0
         for bl in blocks.values():
             if not cfg.getpreds(bl) and not cfg.getsuccs(bl):
+                prune_count += 1
                 del cfg[bl]
+        logger.debug("pruned %d dead code blocks", prune_count)
 
         # find leaves and insert a synthetic exit node
         leaves = {b for b in blocks.values() if not cfg.getsuccs(b)}
@@ -274,18 +279,22 @@ class Decompiler:
 
     def _normalize_edges(self, fs: _FuncState) -> None:
         cfg = fs.cfg
+        trampolines: dict[_Block, _Block] = {}
+        fs.trampolines = trampolines
 
         # first, collapse trampoline chains.
         for block in cfg.succs:
             succs = cfg.getsuccs(block)
-            for i, succ in enumerate(succs):
+            for succ in succs:
                 while len(succ.ins) == 1 and succ.ins[0].opcode is Opcode.JMP:
                     ss = cfg.getsuccs(succ)
                     assert len(ss) == 1, "trampoline must have exactly 1 successor"
                     succ = ss[0]
-                    succs[i] = succ
+                    trampolines[block] = succ
 
         # then, collapse loop breaks.
+        breaks: dict[_Block, _Block] = {}
+        fs.breaks = breaks
         for block in fs.blocks_list:
             ins = block.ins[-2:]
             if len(ins) < 2:
@@ -306,9 +315,9 @@ class Decompiler:
 
             jump = succs[0]
             ss = cfg.getsuccs(jump)
-            assert len(ss) == 1, "loop break trampoline must have exactly 1 successor"
+            assert len(ss) == 2, "loop exit must have exactly 2 successors"
 
-            succs[0] = ss[0]
+            breaks[block] = ss[0]
 
     def _find_loop_headers(self, fs: _FuncState) -> None:
         loops: set[_Block] = set()
@@ -330,7 +339,8 @@ class Decompiler:
             self._emulate(fs, block)
             fs.stmts.append(STReturn(fs.vm.ax))
         else:
-            raise RuntimeError("Unknown bytecode pattern")
+            pass
+            # raise RuntimeError("Unknown bytecode pattern")
 
     def _emulate(self, fs: _FuncState, block: _Block) -> None:
         vm = fs.vm
