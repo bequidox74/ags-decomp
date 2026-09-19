@@ -129,6 +129,7 @@ class Decompiler:
         self.script: STScript
 
         self._max_doms_iters: int = 0
+        self._has_unknown: bool = False
 
         self._decompile()
 
@@ -159,6 +160,11 @@ class Decompiler:
         self._normalize_edges(fs)
         self._find_loop_headers(fs)
         self._recover(fs)
+
+        if self._has_unknown:
+            logger.warning(
+                "unknown bytecode patterns encountered in func %s", fs.func.mangled_name
+            )
 
         return STFunction(func.name, fs.stmts)
 
@@ -339,8 +345,11 @@ class Decompiler:
             self._emulate(fs, block)
             fs.stmts.append(STReturn(fs.vm.ax))
         else:
-            pass
-            # raise RuntimeError("Unknown bytecode pattern")
+            logger.debug(
+                "unknown bytecode pattern in block %s",
+                block,
+            )
+            self._has_unknown = True
 
     def _emulate(self, fs: _FuncState, block: _Block) -> None:
         vm = fs.vm
