@@ -6,7 +6,7 @@ from syntax_tree import STFunction, STScript
 
 from ._cfg import _Block, _CFGraph
 from ._func_state import _VM, _Dominators, _FuncState, _IDomTree
-from ._matcher import _Matcher, match_if, match_while
+from ._match import _Matcher, match_if, match_while
 
 debug: bool = True  # pylint: disable=invalid-name
 logger = logging.getLogger(__name__)

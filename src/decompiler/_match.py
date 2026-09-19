@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 from disassembler import Opcode
 
-from .._cfg import _Block
-from .._func_state import _FuncState
+from ._cfg import _Block
+from ._func_state import _FuncState
 
 
 @dataclass
