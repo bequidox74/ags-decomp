@@ -44,8 +44,8 @@ def match_if(fs: _FuncState, bl: _Block) -> _Match | None:
 
     then = cfg.fallthrough(bl)
     assert then is not None
-    if then == join:
-        return None
+    # if then == join:
+    #     return None
 
     return _IfMatch(bl, join, [then])
 

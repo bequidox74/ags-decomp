@@ -62,7 +62,7 @@ class _CFGraph:
         succs = self.getsuccs(b)
         if len(succs) < 2:
             return None
-        return succs[self.TAKEN]
+        return succs[self.FALLTHROUGH]
 
     def __delitem__(self, key: _Block) -> None:
         del self.preds[key]

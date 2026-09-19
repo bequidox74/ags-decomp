@@ -296,22 +296,23 @@ class Decompiler:
         stmts = []
         visited = set()
         bl = start
-        while bl is not None and bl not in visited:
+        while bl is not None and bl != stop and bl not in visited:
             visited.add(bl)
 
             if bl in fs.regions:
                 m = fs.regions[bl].match
                 stmts.append(m.build(fs, bl))
                 bl = m.join
+                continue
 
             stmt = self._make_leaf(fs, bl)
             if stmt is not None:
-                stmts.append(stmt)
-            bl = self._follow(fs, bl, stop)
+                stmts.extend(stmt)
+            bl = self._follow(fs, bl)
 
         return stmts
 
-    def _follow(self, fs: _FuncState, bl: _Block, stop: _Block | None) -> _Block | None:
+    def _follow(self, fs: _FuncState, bl: _Block) -> _Block | None:
         if bl is fs.omega:
             return None
         if bl in fs.trampolines:
@@ -327,24 +328,22 @@ class Decompiler:
 
         term = bl.ins[-1]
         if term.opcode is Opcode.JMP:
-            if term is stop:
-                return None
             return fs.cfg.taken(bl)
 
         return None
 
-    def _make_leaf(self, fs: _FuncState, bl: _Block) -> StStatement | None:
+    def _make_leaf(self, fs: _FuncState, bl: _Block) -> list[StStatement] | None:
         if bl is fs.omega:
             return None
         if bl in fs.trampolines:
             return None
         if bl in fs.breaks:
-            return StBreak()
+            return [StBreak()]
 
         assert len(bl.ins) > 0
         term = bl.ins[-1]
         if term.opcode is Opcode.RET:
-            return StReturn(PLACEHOLDER)
+            return [StReturn(PLACEHOLDER)]
         return None
 
     def _emulate(self, fs: _FuncState, bl: _Block) -> None:
