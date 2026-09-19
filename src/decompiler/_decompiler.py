@@ -2,11 +2,11 @@ import logging
 from typing import ClassVar
 
 from disassembler import Disassembly, Function, Instruction, Label, Opcode, Register
-from syntax_tree import STFunction, STScript
 
 from ._cfg import _Block, _CFGraph
-from ._func_state import _VM, _Dominators, _FuncState, _IDomTree
-from ._match import _Matcher, match_if, match_while
+from ._func_state import _VM, _Dominators, _FuncState, _IDomTree, _Region
+from ._match import MATCHERS
+from ._syntax_tree import *
 
 debug: bool = True  # pylint: disable=invalid-name
 logger = logging.getLogger(__name__)
@@ -19,21 +19,20 @@ class Decompiler:
         Opcode.JNZ,
     }
 
-    _TERMINATORS: ClassVar[set[Opcode]] = {
+    _JUMPS: ClassVar[set[Opcode]] = {
         Opcode.JMP,
         Opcode.JZ,
         Opcode.JNZ,
-        Opcode.RET,
     }
+
+    _TERMINATORS: ClassVar[set[Opcode]] = _JUMPS | {Opcode.RET}
 
     _SUCC_TAKEN: ClassVar = 0
     _SUCC_FALLTHROUGH: ClassVar = 1
 
-    _MATCHERS: ClassVar[list[_Matcher]] = [match_if, match_while]
-
     def __init__(self, disassembly: Disassembly) -> None:
         self.disassembly = disassembly
-        self.script: STScript
+        self.script: StScript
 
         self._max_doms_iters: int = 0
         self._has_unknown: bool = False
@@ -41,13 +40,13 @@ class Decompiler:
         self._decompile()
 
     def _decompile(self) -> None:
-        funcs: list[STFunction] = []
+        funcs: list[StFunction] = []
         for f in self.disassembly.functions:
             funcs.append(self._do_func(f))
 
         self.script = self._make_script(funcs)
 
-    def _do_func(self, func: Function) -> STFunction:
+    def _do_func(self, func: Function) -> StFunction:
         logger.info("decompiling %s", func.mangled_name)
         fs = _FuncState(func)
 
@@ -73,7 +72,7 @@ class Decompiler:
                 "unknown bytecode patterns encountered in func %s", fs.func.mangled_name
             )
 
-        return STFunction(func.name, fs.stmts)
+        return StFunction(func.name, fs.stmts)
 
     def _find_leaders(self, fs: _FuncState) -> None:
         logger.debug("finding leaders")
@@ -256,7 +255,7 @@ class Decompiler:
 
         logger.debug("matching patterns for headers")
         for b in blocks:
-            self._match_patterns(fs, b)
+            self._structure(fs, b)
 
     def _find_headers(self, fs: _FuncState) -> None:
         logger.debug("finding headers")
@@ -272,27 +271,89 @@ class Decompiler:
 
             last = b.ins[-1]
             if last.opcode is Opcode.JZ:
-                headers.add(b)  # jz may be a switch or an ordinary if/else.
+                headers.add(b)  # JZ may be a switch or an ordinary if-else.
             elif last.opcode is Opcode.JNZ:
                 succs = fs.cfg.getsuccs(b)
                 succ = succs[self._SUCC_TAKEN]
                 if succ in fs.loop_headers:
-                    # jnz with a jump to a loop header is a do/while terminator.
+                    # JNZ with a jump to a loop header is a do-while terminator.
                     headers.add(succs[self._SUCC_TAKEN])
 
-    def _match_patterns(self, fs: _FuncState, block: _Block) -> None:
-        for matcher in self._MATCHERS:
-            match = matcher(fs, block)
+    def _structure(self, fs: _FuncState, bl: _Block) -> None:
+        regions: dict[_Block, _Region] = {}
+        fs.regions = regions
+        for matcher in MATCHERS:
+            match = matcher(fs, bl)
             if match is None:
                 continue
+            regions[bl] = _Region(match, fs.blocks_between(match.header, match.join))
 
-    def _emulate(self, fs: _FuncState, block: _Block) -> None:
+        fs.stmts.extend(self._build_block(fs, fs.alpha))
+
+    def _build_block(
+        self, fs: _FuncState, start: _Block, stop: _Block | None = None
+    ) -> list[StStatement]:
+        stmts = []
+        visited = set()
+        bl = start
+        while bl is not None and bl not in visited:
+            visited.add(bl)
+
+            if bl in fs.regions:
+                m = fs.regions[bl].match
+                stmts.append(m.build(fs, bl))
+                bl = m.join
+
+            stmt = self._make_leaf(fs, bl)
+            if stmt is not None:
+                stmts.append(stmt)
+            bl = self._follow(fs, bl, stop)
+
+        return stmts
+
+    def _follow(self, fs: _FuncState, bl: _Block, stop: _Block | None) -> _Block | None:
+        if bl is fs.omega:
+            return None
+        if bl in fs.trampolines:
+            return fs.trampolines[bl]
+
+        succs = fs.cfg.getsuccs(bl)
+        if len(succs) == 1:
+            return succs[0]
+
+        ft = fs.cfg.fallthrough(bl)
+        if ft is not None:
+            return ft
+
+        term = bl.ins[-1]
+        if term.opcode is Opcode.JMP:
+            if term is stop:
+                return None
+            return fs.cfg.taken(bl)
+
+        return None
+
+    def _make_leaf(self, fs: _FuncState, bl: _Block) -> StStatement | None:
+        if bl is fs.omega:
+            return None
+        if bl in fs.trampolines:
+            return None
+        if bl in fs.breaks:
+            return StBreak()
+
+        assert len(bl.ins) > 0
+        term = bl.ins[-1]
+        if term.opcode is Opcode.RET:
+            return StReturn(PLACEHOLDER)
+        return None
+
+    def _emulate(self, fs: _FuncState, bl: _Block) -> None:
         vm = fs.vm
-        for ins in block.ins:
+        for ins in bl.ins:
             if ins.opcode is Opcode.LITTOREG:
                 reg = ins.as_reg(0)
                 lit = ins.as_int(1)
                 vm.setreg(reg, lit)
 
-    def _make_script(self, funcs: list[STFunction]) -> STScript:
-        return STScript(funcs)
+    def _make_script(self, funcs: list[StFunction]) -> StScript:
+        return StScript(funcs)

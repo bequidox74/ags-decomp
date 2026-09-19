@@ -27,6 +27,9 @@ class _CFGraph:
     preds: dict[_Block, list[_Block]] = field(default_factory=dict)
     succs: dict[_Block, list[_Block]] = field(default_factory=dict)
 
+    TAKEN = 0
+    FALLTHROUGH = 1
+
     def link(self, from_: _Block, to: _Block) -> None:
         self.succs.setdefault(from_, []).append(to)
         self.preds.setdefault(to, []).append(from_)
@@ -48,6 +51,18 @@ class _CFGraph:
 
     def getsuccs(self, b: _Block) -> list[_Block]:
         return self.succs.setdefault(b, [])
+
+    def taken(self, b: _Block) -> _Block | None:
+        succs = self.getsuccs(b)
+        if succs:
+            return succs[self.TAKEN]
+        return None
+
+    def fallthrough(self, b: _Block) -> _Block | None:
+        succs = self.getsuccs(b)
+        if len(succs) < 2:
+            return None
+        return succs[self.TAKEN]
 
     def __delitem__(self, key: _Block) -> None:
         del self.preds[key]

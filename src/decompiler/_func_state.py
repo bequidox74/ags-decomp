@@ -1,9 +1,13 @@
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, NamedTuple
 
 from disassembler import Function, Instruction, Register
-from syntax_tree import STStatement
 
 from ._cfg import _Block, _CFGraph
+from ._syntax_tree import StStatement
+
+if TYPE_CHECKING:
+    from ._match import _Match
 
 type _Dominators = dict[_Block, set[_Block]]
 type _IDomTree = dict[_Block, _Block]
@@ -24,6 +28,11 @@ class _VM:
             self.ax = value
         else:
             raise NotImplementedError
+
+
+class _Region(NamedTuple):
+    match: _Match
+    blocks: set[_Block]
 
 
 @dataclass(init=False)
@@ -47,9 +56,21 @@ class _FuncState:
     breaks: dict[_Block, _Block]
     loop_headers: set[_Block]
     headers: set[_Block]
-    stmts: list[STStatement]
+    stmts: list[StStatement]
+    regions: dict[_Block, _Region]
     vm: _VM
 
     def __init__(self, func: Function) -> None:
         self.func = func
         self.stmts = []
+
+    def blocks_between(self, from_: _Block, to: _Block) -> set[_Block]:
+        dominated = set()
+        postdominated = set()
+        for b in self.dom:
+            if from_ in self.dom[b]:
+                dominated.add(b)
+        for b in self.pdom:
+            if to in self.pdom[b]:
+                postdominated.add(b)
+        return dominated.intersection(postdominated)
