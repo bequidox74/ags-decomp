@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import ClassVar
 
 from disassembler import Disassembly, Function, Instruction, Label, Opcode, Register
-from syntax_tree import STFunction, STReturn, STScript, STStatement
+from syntax_tree import STFunction, STScript, STStatement
 
 debug: bool = True  # pylint: disable=invalid-name
 logger = logging.getLogger(__name__)
@@ -52,6 +51,7 @@ class _FuncState:
     trampolines: dict[_Block, _Block]
     breaks: dict[_Block, _Block]
     loop_headers: set[_Block]
+    headers: set[_Block]
     stmts: list[STStatement]
     vm: _VM
 
@@ -111,6 +111,21 @@ class _CFGraph:
         del self.succs[key]
 
 
+class _MatchKind(Enum):
+    WHILE = "while"
+    DO_WHILE = "do-while"
+    SWITCH = "switch"
+    IF_ELSE = "if-else"
+    IF = "if"
+
+
+@dataclass
+class _Match:
+    kind: _MatchKind
+    header: _Block
+    join: _Block
+
+
 class Decompiler:
     _BRANCH: ClassVar[set[Opcode]] = {
         Opcode.JZ,
@@ -123,6 +138,9 @@ class Decompiler:
         Opcode.JNZ,
         Opcode.RET,
     }
+
+    _SUCC_TAKEN: ClassVar = 0
+    _SUCC_FALLTHROUGH: ClassVar = 1
 
     def __init__(self, disassembly: Disassembly) -> None:
         self.disassembly = disassembly
@@ -144,21 +162,21 @@ class Decompiler:
         logger.info("decompiling %s", func.mangled_name)
         fs = _FuncState(func)
 
-        logger.debug("building CFG")
         self._find_leaders(fs)
         self._build_blocks(fs)
         self._link_blocks(fs)
 
-        logger.debug("building domtrees")
+        logger.debug("finding dominators")
         fs.dom = self._dominators(fs.blocks_list, fs.cfg, fs.alpha)
-        fs.pdom = self._dominators(fs.blocks_list, fs.revcfg, fs.omega)
         fs.idom = self._idom_tree(fs.dom)
+
+        logger.debug("finding postdominators")
+        fs.pdom = self._dominators(fs.blocks_list, fs.revcfg, fs.omega)
         fs.ipdom = self._idom_tree(fs.pdom)
 
-        logger.debug("recovering source code")
         fs.vm = _VM()
         self._normalize_edges(fs)
-        self._find_loop_headers(fs)
+        # self._find_loop_headers(fs)
         self._recover(fs)
 
         if self._has_unknown:
@@ -169,6 +187,7 @@ class Decompiler:
         return STFunction(func.name, fs.stmts)
 
     def _find_leaders(self, fs: _FuncState) -> None:
+        logger.debug("finding leaders")
         func = fs.func
         leaders: set[Instruction] = set()
         fs.leaders = leaders
@@ -187,6 +206,7 @@ class Decompiler:
         assert len(leaders) > 0, "function must have at least one leader"
 
     def _build_blocks(self, fs: _FuncState) -> None:
+        logger.debug("building bytecode blocks")
         blocks: list[list[Instruction]] = []
 
         current: list[Instruction] = []
@@ -203,6 +223,7 @@ class Decompiler:
         fs.blocks_list = list(fs.blocks.values())
 
     def _link_blocks(self, fs: _FuncState) -> None:
+        logger.debug("linking blocks into a CFG")
         cfg = _CFGraph()
 
         blocks = fs.blocks
@@ -284,6 +305,7 @@ class Decompiler:
         return idom
 
     def _normalize_edges(self, fs: _FuncState) -> None:
+        logger.debug("normalizing edges")
         cfg = fs.cfg
         trampolines: dict[_Block, _Block] = {}
         fs.trampolines = trampolines
@@ -320,10 +342,13 @@ class Decompiler:
             assert len(succs) == 1, "loop break must have exactly 1 successor"
 
             jump = succs[0]
+            if jump.ins[-1].opcode is not Opcode.JZ:
+                # we're only concerned with jmps to jzs, i.e. loop conditions.
+                continue
             ss = cfg.getsuccs(jump)
             assert len(ss) == 2, "loop exit must have exactly 2 successors"
 
-            breaks[block] = ss[0]
+            breaks[block] = ss[self._SUCC_TAKEN]
 
     def _find_loop_headers(self, fs: _FuncState) -> None:
         loops: set[_Block] = set()
@@ -334,22 +359,57 @@ class Decompiler:
                     loops.add(s)
 
     def _recover(self, fs: _FuncState) -> None:
+        logger.debug("recovering source code")
+        self._find_headers(fs)
         # sort blocks by depth so innermost blocks are processed first.
-        blocks = sorted(fs.blocks_list, key=lambda b: len(fs.dom[b]), reverse=True)
-        for b in blocks:
-            self._pattern_match(fs, b)
+        logger.debug("sorting blocks by depth")
+        blocks = sorted(fs.headers, key=lambda b: len(fs.dom[b]), reverse=True)
 
-    def _pattern_match(self, fs: _FuncState, block: _Block) -> None:
+        logger.debug("matching patterns for headers")
+        for b in blocks:
+            self._match_patterns(fs, b)
+
+    def _find_headers(self, fs: _FuncState) -> None:
+        logger.debug("finding headers")
+        headers: set[_Block] = set()
+        fs.headers = headers
+
+        for b in fs.blocks_list:
+            assert len(b.ins) > 0, "block must not be empty"
+            if b in fs.trampolines:
+                continue  # trampolines cannot be headers
+            if b in fs.breaks:
+                continue  # breaks also cannot be headers
+
+            last = b.ins[-1]
+            if last.opcode is Opcode.JZ:
+                headers.add(b)  # jz may be a switch or an ordinary if/else.
+            elif last.opcode is Opcode.JNZ:
+                succs = fs.cfg.getsuccs(b)
+                succ = succs[self._SUCC_TAKEN]
+                if succ in fs.loop_headers:
+                    # jnz with a jump to a loop header is a do/while terminator.
+                    headers.add(succs[self._SUCC_TAKEN])
+
+    def _match_patterns(self, fs: _FuncState, block: _Block) -> None:
+        for matcher in self._MATCHERS:
+            match_ = matcher(self, fs, block)  # pylint: disable=too-many-function-args
+
+    def _match_while(self, fs: _FuncState, block: _Block) -> _Match | None:
         term = block.ins[-1]
-        if term.opcode is Opcode.RET:
-            self._emulate(fs, block)
-            fs.stmts.append(STReturn(fs.vm.ax))
-        else:
-            logger.debug(
-                "unknown bytecode pattern in block %s",
-                block,
-            )
-            self._has_unknown = True
+        if term.opcode is not Opcode.JZ:
+            return None
+        if block not in fs.loop_headers:
+            return None
+        exit_ = fs.cfg.getsuccs(block)[self._SUCC_TAKEN]
+        if fs.ipdom[block] != exit_:
+            return None
+        return _Match(_MatchKind.WHILE, block, exit_)
+
+    def _match_if(self, fs: _FuncState, block: _Block) -> _Match | None:
+        raise NotImplementedError
+
+    _MATCHERS: ClassVar = (_match_while, _match_if)
 
     def _emulate(self, fs: _FuncState, block: _Block) -> None:
         vm = fs.vm
