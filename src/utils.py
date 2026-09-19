@@ -1,13 +1,9 @@
-from collections.abc import Iterable
 from itertools import batched
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 def verify(cond: bool, *args) -> None:
     if not cond:
-        raise AssertionError(*args)
+        raise RuntimeError(*args)
 
 
 def sjoin(joiner: str, *args):

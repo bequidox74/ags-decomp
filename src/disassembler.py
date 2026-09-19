@@ -8,7 +8,7 @@ from typing import Annotated, NamedTuple
 
 from binary_reader import BinaryReader
 from string_writer import StringWriter
-from utils import format_bindata, quote
+from utils import format_bindata, quote, verify
 
 type Primitive = int | str | float
 type Parameter = FixedUpValue | Label | Register
@@ -336,7 +336,9 @@ class Disassembly:
         return self.format()
 
     def _read_scom(self, br: BinaryReader) -> None:
-        assert br.read_fixed_string(4) == "SCOM", "Source is not a compiled AGS script"
+        verify(
+            br.read_fixed_string(4) == "SCOM", "Script must start with 'SCOM' signature"
+        )
         self.scom_version = br.u32()
         assert self.scom_version == 90, "Unsupported SCOM version"
 
@@ -392,7 +394,7 @@ class Disassembly:
             offset = br.u32()
             self.sections.append(Section(name, offset))
 
-        assert br.u32() == 0xBEEFCAFE, "Invalid SCOM end signature"
+        verify(br.u32() == 0xBEEFCAFE, "Invalid SCOM end signature")
 
     def _disassemble(self):
         # exports can contain *both* functions and variables.
