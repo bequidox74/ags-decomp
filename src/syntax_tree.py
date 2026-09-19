@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -6,6 +6,7 @@ from string_writer import StringWriter
 
 
 class AST(ABC):
+    @abstractmethod
     def emit(self, sw: StringWriter) -> None:
         pass
 

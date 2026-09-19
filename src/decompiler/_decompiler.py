@@ -1,129 +1,16 @@
 import logging
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import ClassVar
 
 from disassembler import Disassembly, Function, Instruction, Label, Opcode, Register
-from syntax_tree import STFunction, STScript, STStatement
+from syntax_tree import STFunction, STScript
+
+from ._cfg import _Block, _CFGraph
+from ._func_state import _VM, _Dominators, _FuncState, _IDomTree
+from ._matcher import _Matcher, match_if, match_while
 
 debug: bool = True  # pylint: disable=invalid-name
 logger = logging.getLogger(__name__)
 logger.disabled = not debug
-
-type _Dominators = dict[_Block, set[_Block]]
-type _IDomTree = dict[_Block, _Block]
-
-
-@dataclass
-class _VM:
-    ax: int = 0
-
-    def getreg(self, register: Register) -> int:
-        if register is Register.AX:
-            return self.ax
-        else:
-            raise NotImplementedError
-
-    def setreg(self, register: Register, value) -> None:
-        if register is Register.AX:
-            self.ax = value
-        else:
-            raise NotImplementedError
-
-
-@dataclass(init=False)
-class _FuncState:
-    func: Function
-    leaders: set[Instruction]
-    blocks: dict[int, _Block]
-    blocks_list: list[_Block]
-
-    cfg: _CFGraph
-    revcfg: _CFGraph
-    alpha: _Block
-    omega: _Block
-
-    dom: _Dominators
-    pdom: _Dominators
-    idom: _IDomTree
-    ipdom: _IDomTree
-
-    trampolines: dict[_Block, _Block]
-    breaks: dict[_Block, _Block]
-    loop_headers: set[_Block]
-    headers: set[_Block]
-    stmts: list[STStatement]
-    vm: _VM
-
-    def __init__(self, func: Function) -> None:
-        self.func = func
-        self.stmts = []
-
-
-@dataclass
-class _Block:
-    ins: list[Instruction]
-
-    def __hash__(self) -> int:
-        return id(self.ins)
-
-    def __eq__(self, value: object) -> bool:
-        return self is value
-
-    def __repr__(self) -> str:
-        if self.ins:
-            first = str(self.ins[0])
-            last = str(self.ins[-1])
-            return f"<Block {first}..{last}>"
-        else:
-            return "<Block>"
-
-
-@dataclass
-class _CFGraph:
-    preds: dict[_Block, list[_Block]] = field(default_factory=dict)
-    succs: dict[_Block, list[_Block]] = field(default_factory=dict)
-
-    def link(self, from_: _Block, to: _Block) -> None:
-        self.succs.setdefault(from_, []).append(to)
-        self.preds.setdefault(to, []).append(from_)
-
-    def unlink(self, from_: _Block, to: _Block) -> None:
-        self.succs.get(from_, []).remove(to)
-        self.preds.get(to, []).remove(from_)
-
-    def reverse(self) -> _CFGraph:
-        result = _CFGraph()
-        for b, p in self.preds.items():
-            result.succs[b] = p  # pylint: disable=protected-access
-        for b, s in self.succs.items():
-            result.preds[b] = s  # pylint: disable=protected-access
-        return result
-
-    def getpreds(self, b: _Block) -> list[_Block]:
-        return self.preds.setdefault(b, [])
-
-    def getsuccs(self, b: _Block) -> list[_Block]:
-        return self.succs.setdefault(b, [])
-
-    def __delitem__(self, key: _Block) -> None:
-        del self.preds[key]
-        del self.succs[key]
-
-
-class _MatchKind(Enum):
-    WHILE = "while"
-    DO_WHILE = "do-while"
-    SWITCH = "switch"
-    IF_ELSE = "if-else"
-    IF = "if"
-
-
-@dataclass
-class _Match:
-    kind: _MatchKind
-    header: _Block
-    join: _Block
 
 
 class Decompiler:
@@ -141,6 +28,8 @@ class Decompiler:
 
     _SUCC_TAKEN: ClassVar = 0
     _SUCC_FALLTHROUGH: ClassVar = 1
+
+    _MATCHERS: ClassVar[list[_Matcher]] = [match_if, match_while]
 
     def __init__(self, disassembly: Disassembly) -> None:
         self.disassembly = disassembly
@@ -176,7 +65,7 @@ class Decompiler:
 
         fs.vm = _VM()
         self._normalize_edges(fs)
-        # self._find_loop_headers(fs)
+        self._find_loop_headers(fs)
         self._recover(fs)
 
         if self._has_unknown:
@@ -343,7 +232,7 @@ class Decompiler:
 
             jump = succs[0]
             if jump.ins[-1].opcode is not Opcode.JZ:
-                # we're only concerned with jmps to jzs, i.e. loop conditions.
+                # we're only concerned with JMPs to JZs, i.e. loop conditions.
                 continue
             ss = cfg.getsuccs(jump)
             assert len(ss) == 2, "loop exit must have exactly 2 successors"
@@ -393,23 +282,9 @@ class Decompiler:
 
     def _match_patterns(self, fs: _FuncState, block: _Block) -> None:
         for matcher in self._MATCHERS:
-            match_ = matcher(self, fs, block)  # pylint: disable=too-many-function-args
-
-    def _match_while(self, fs: _FuncState, block: _Block) -> _Match | None:
-        term = block.ins[-1]
-        if term.opcode is not Opcode.JZ:
-            return None
-        if block not in fs.loop_headers:
-            return None
-        exit_ = fs.cfg.getsuccs(block)[self._SUCC_TAKEN]
-        if fs.ipdom[block] != exit_:
-            return None
-        return _Match(_MatchKind.WHILE, block, exit_)
-
-    def _match_if(self, fs: _FuncState, block: _Block) -> _Match | None:
-        raise NotImplementedError
-
-    _MATCHERS: ClassVar = (_match_while, _match_if)
+            match = matcher(fs, block)
+            if match is None:
+                continue
 
     def _emulate(self, fs: _FuncState, block: _Block) -> None:
         vm = fs.vm
