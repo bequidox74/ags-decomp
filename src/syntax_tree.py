@@ -1,6 +1,6 @@
 from abc import ABC
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from string_writer import StringWriter
 
@@ -14,14 +14,33 @@ class STItem(AST):
     pass
 
 
+class STStatement(AST):
+    pass
+
+
+@dataclass
+class STReturn(STStatement):
+    value: int
+
+    def emit(self, sw: StringWriter) -> None:
+        sw.print(f"return {self.value};")
+
+
 @dataclass
 class STFunction(STItem):
     name: str
+    stmts: list[STStatement]
 
     def emit(self, sw: StringWriter) -> None:
         sw.print("function ")
         sw.print(self.name)
-        sw.print(" {}")
+        sw.println("() {")
+        sw.indent()
+        for s in self.stmts:
+            s.emit(sw)
+            sw.println()
+        sw.dedent()
+        sw.print("}")
 
 
 @dataclass

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import itertools
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import Annotated, NamedTuple
 
@@ -278,7 +278,9 @@ class Disassembly:
                         old_level = sw.level
                         sw.cr()
                         njumps = len(self.jumps[self._offset])
-                        sw.println(f"L{self._offset}_{func.name}: ; {njumps} references")
+                        sw.println(
+                            f"L{self._offset}_{func.name}: ; {njumps} references"
+                        )
                         sw.level = old_level
 
                     is_linenum = item.opcode == Opcode.LINENUM
