@@ -1,8 +1,14 @@
+import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from decompiler.disassembler import Function, Instruction, Opcode
 
+logger = logging.getLogger(__name__)
+
 type Offset = int
+type Dominators = dict[Block, set[Block]]
+type ImDominators = dict[Block, Block]
 
 _JUMPS = {
     Opcode.JMP,
@@ -46,8 +52,8 @@ class Block:
 class CFG:
     entry: Block
     exit: Block
-    pred: dict[Block, list[Block]] = field(default_factory=dict)
-    succ: dict[Block, list[Block]] = field(default_factory=dict)
+    pred: dict[Block, list[Block]] = field(default_factory=lambda: defaultdict(list))
+    succ: dict[Block, list[Block]] = field(default_factory=lambda: defaultdict(list))
 
     def __post_init__(self) -> None:
         assert len(self.pred) == len(self.succ)
@@ -55,8 +61,8 @@ class CFG:
         assert self.exit not in self.succ
 
     def link(self, a: Block, b: Block) -> None:
-        self.succ.setdefault(a, []).append(b)
-        self.pred.setdefault(b, []).append(a)
+        self.succ[a].append(b)
+        self.pred[b].append(a)
 
     def fallthrough(self, b: Block) -> Block:
         return self.succ[b][0]
@@ -67,8 +73,8 @@ class CFG:
     def reversed(self) -> CFG:
         result = CFG(self.exit, self.entry)
         for bl in self.pred:
-            result.succ.setdefault(bl, []).extend(result.pred.get(bl, []))
-            result.pred.setdefault(bl, []).extend(result.succ.get(bl, []))
+            result.succ[bl].extend(result.pred[bl])
+            result.pred[bl].extend(result.succ[bl])
         return result
 
 
@@ -76,16 +82,23 @@ class CFG:
 class ControlFlow:
     leaders: set[Instruction]
     blocks: dict[Offset, Block]
+    blocks_list: list[Block]
     cfg: CFG
     reverse_cfg: CFG
+
+    dom: Dominators  # dominators
+    idom: dict[Block, Block]  # immediate dominators
 
 
 def analyze(func: Function) -> ControlFlow:
     cf = ControlFlow()
     cf.leaders = _find_leaders(func)
     cf.blocks = _make_blocks(func, cf.leaders)
+    cf.blocks_list = list(cf.blocks.values())
     cf.cfg = _build_cfg(cf.blocks)
     cf.reverse_cfg = cf.cfg.reversed()
+    cf.dom = _find_dominators(cf.cfg, cf.blocks_list)
+    cf.idom = _compute_idom(cf.dom)
     return cf
 
 
@@ -145,3 +158,42 @@ def _build_cfg(blocks: dict[Offset, Block]) -> CFG:
             cfg.link(bl, blocks[offsets[i + 1]])
 
     return cfg
+
+
+def _find_dominators(cfg: CFG, blocks: list[Block]) -> Dominators:
+    """
+    Implements a naive algorithm for finding the dominators
+    in a CFG. Has quadratic complexity O(V*E) in the worst case.
+    In practice, usually converges in just a few runs.
+    """
+    dom: Dominators = {b: set(blocks) for b in blocks}
+    dom[cfg.entry] = {cfg.entry}
+
+    changed = True
+    iters = 0
+    while changed:
+        iters += 1
+        changed = False
+        for bl, bl_dom in dom.items():
+            if bl is cfg.entry:
+                continue  # skip the entry; it trivially dominates everything.
+            pred = cfg.pred[bl]
+            if not pred:
+                continue  # can happen with dead code.
+            # compute the dominator equation
+            new_dom = {bl} | set.intersection(*(dom[p] for p in pred))
+            if new_dom != bl_dom:
+                changed = True
+                dom[bl] = new_dom
+
+    logger.debug("max dominators iterations: %d", iters)
+    return dom
+
+
+def _compute_idom(dom: Dominators) -> ImDominators:
+    idom: ImDominators = {}
+    for bl, bl_dom in dom.items():
+        strict = bl_dom - {bl}
+        if strict:
+            idom[bl] = max(strict, key=lambda b: len(dom[b]))
+    return idom
