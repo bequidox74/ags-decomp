@@ -88,6 +88,8 @@ class ControlFlow:
 
     dom: Dominators  # dominators
     idom: dict[Block, Block]  # immediate dominators
+    pdom: Dominators  # postdominators
+    ipdom: dict[Block, Block]  # immediate postdominators
 
 
 def analyze(func: Function) -> ControlFlow:
@@ -99,6 +101,8 @@ def analyze(func: Function) -> ControlFlow:
     cf.reverse_cfg = cf.cfg.reversed()
     cf.dom = _find_dominators(cf.cfg, cf.blocks_list)
     cf.idom = _compute_idom(cf.dom)
+    cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list)
+    cf.ipdom = _compute_idom(cf.pdom)
     return cf
 
 
