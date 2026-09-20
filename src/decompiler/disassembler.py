@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import enum
-import itertools
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import NamedTuple, Self
 from warnings import warn
@@ -12,8 +11,8 @@ from binary_reader import BinaryReader
 from string_writer import StringWriter
 from utils import format_bindata, quote, verify
 
-type Primitive = int | str | float
 type Parameter = Fixup | Label | Register
+type Offset = int
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
@@ -120,7 +119,7 @@ class ExportType(IntEnum):
 
 class Export(NamedTuple):
     name: str
-    address: int
+    address: Offset
     type: ExportType
 
 
@@ -150,11 +149,11 @@ class FixupType(IntEnum):
 @dataclass
 class Fixup:
     original: int
-    fixed: Primitive | None = None
-    type_: FixupType = FixupType.NO_FIXUP
+    fixed: int | str
+    type: FixupType
 
     def __str__(self) -> str:
-        match self.type_:
+        match self.type:
             case FixupType.STRING:
                 return quote(str(self.fixed))
             case FixupType.IMPORT:
@@ -183,23 +182,28 @@ class Instruction:
     code_offset: Offset
     func_offset: Offset
 
-    def as_reg(self, idx: int) -> Register:
+    def get_reg(self, idx: int = 0) -> Register:
         reg = self.params[idx]
         assert isinstance(reg, Register)
         return reg
 
-    def as_int(self, idx: int) -> int:
+    def get_int(self, idx: int = 0) -> int:
         val = self.params[idx]
         assert isinstance(val, Fixup)
-        assert val.type_ == FixupType.NO_FIXUP
+        assert val.type == FixupType.NO_FIXUP
         return val.original
 
-    def as_fup(self, idx: int, type_: FixupType | None = None) -> Fixup:
+    def get_fixup(self, idx: int = 0, type_: FixupType | None = None) -> Fixup:
         fup = self.params[idx]
         assert isinstance(fup, Fixup)
         if type_ is not None:
-            assert fup.type_ == type_
+            assert fup.type == type_
         return fup
+
+    def get_label(self, idx: int = 0) -> Label:
+        label = self.params[idx]
+        assert isinstance(label, Label)
+        return label
 
     def __post_init__(self) -> None:
         assert len(self.params) <= 3
@@ -219,16 +223,23 @@ class Instruction:
         return f"<Instruction '{self}'>"
 
 
-class Function(NamedTuple):
+@dataclass
+class Function:
     mangled_name: str
     name: str
     nargs: int
     code_offset: int
     script_offset: int
-    instructions: dict[int, Instruction]
+    size: int
 
+    instructions: dict[Offset, Instruction]
+    """Dict of `code offset` -> `Instruction`"""
 
-type Offset = int
+    instr_list: list[Instruction] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.instr_list = list(self.instructions.values())
+        self.instr_list.sort(key=lambda i: i.func_offset)
 
 
 class Disassembly:
@@ -259,6 +270,7 @@ class Disassembly:
         self.functions: dict[Offset, Function] = {}
         """Dict of `code offset` -> `Function`"""
         self.jumps: defaultdict[Offset, set[Label]] = defaultdict(set)
+        self._func_ranges: list[range]
 
         with BinaryReader(source) as br:
             self._read_scom(br)
@@ -269,6 +281,12 @@ class Disassembly:
 
     def code_to_script_offset(self, code: Offset) -> Offset:
         return self.code_offset + code * 4
+
+    def code_offset_to_func(self, code: Offset) -> Function | None:
+        range_ = next((r for r in self._func_ranges if code in r), None)
+        if range_ is None:
+            return None
+        return self.functions[range_.start]
 
     def __str__(self) -> str:
         return self.format()
@@ -353,20 +371,24 @@ class Disassembly:
         # exports can contain *both* functions and variables.
         # read exports table to find out where the functions begin and end.
         entries: list[Offset] = []
-        names: dict[Offset, str] = {}
+        self._func_names: dict[Offset, str] = {}
         for e in self.exports.values():
             if e.type is not ExportType.FUNCTION:
                 continue
             entries.append(e.address)
-            names[e.address] = e.name
+            self._func_names[e.address] = e.name
 
         # build ranges (start, end) in ascending order.
         entries.sort()
         entries.append(len(self.code))
-        ranges: list[tuple[int, int]] = list(itertools.pairwise(entries))  # make pairs
+        self._func_ranges: list[range] = [
+            range(entries[i], entries[i + 1]) for i in range(len(entries) - 1)
+        ]
 
-        for start, end in ranges:
-            func = self._dis_function(start, end, names[start])
+        for r in self._func_ranges:
+            start = r.start
+            end = r.stop
+            func = self._dis_function(start, end, self._func_names[start])
             self.functions[start] = func
 
     def _dis_function(self, start: int, end: int, mangled_name: str) -> Function:
@@ -383,7 +405,9 @@ class Disassembly:
             instructions[pc] = instr
             pc += 1 + opcode.nargs
 
-        return Function(mangled_name, name, nargs, start, script_offset, instructions)
+        return Function(
+            mangled_name, name, nargs, start, script_offset, end - start, instructions
+        )
 
     def _process_opcode(
         self, start: Offset, pc: Offset, opcode: Opcode, func_name: str
@@ -419,9 +443,9 @@ class Disassembly:
                             case FixupType.IMPORT:
                                 params.append(Fixup(arg, self.imports[arg], type_))
                             case _:
-                                params.append(Fixup(arg, None, type_))
+                                params.append(Fixup(arg, arg, type_))
                     else:
-                        params.append(Fixup(arg, None, FixupType.NO_FIXUP))
+                        params.append(Fixup(arg, arg, FixupType.NO_FIXUP))
 
         return Instruction(opcode, params, pc, func_offset)
 
