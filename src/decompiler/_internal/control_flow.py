@@ -1,9 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from decompiler.disassembler import Function, Instruction, Opcode
 
 type Offset = int
-type Block = list[Instruction]
 
 _JUMPS = {
     Opcode.JMP,
@@ -11,17 +10,82 @@ _JUMPS = {
     Opcode.JNZ,
 }
 
+_COND_JUMPS = {
+    Opcode.JZ,
+    Opcode.JNZ,
+}
+
+
+@dataclass
+class Block:
+    ins: list[Instruction] = field(default_factory=list)
+    term: Instruction = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.ins:
+            self.term = self.ins[-1]
+
+    def __repr__(self) -> str:
+        ins: str
+        if len(self.ins) == 0:
+            ins = ""
+        elif len(self.ins) == 1:
+            ins = " " + str(self.ins[0])
+        elif len(self.ins) == 2:
+            ins = f" {self.ins[0]}; {self.ins[1]}"
+        else:
+            ins = f" {self.ins[0]}..{self.ins[-1]}"
+
+        return f"<Block{ins}>"
+
+    def __hash__(self) -> int:
+        return id(self.ins)
+
+
+@dataclass()
+class CFG:
+    entry: Block
+    exit: Block
+    pred: dict[Block, list[Block]] = field(default_factory=dict)
+    succ: dict[Block, list[Block]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        assert len(self.pred) == len(self.succ)
+        assert self.entry not in self.pred
+        assert self.exit not in self.succ
+
+    def link(self, a: Block, b: Block) -> None:
+        self.succ.setdefault(a, []).append(b)
+        self.pred.setdefault(b, []).append(a)
+
+    def fallthrough(self, b: Block) -> Block:
+        return self.succ[b][0]
+
+    def jump(self, b: Block) -> Block:
+        return self.succ[b][1]
+
+    def reversed(self) -> CFG:
+        result = CFG(self.exit, self.entry)
+        for bl in self.pred:
+            result.succ.setdefault(bl, []).extend(result.pred.get(bl, []))
+            result.pred.setdefault(bl, []).extend(result.succ.get(bl, []))
+        return result
+
 
 @dataclass(init=False)
 class ControlFlow:
     leaders: set[Instruction]
     blocks: dict[Offset, Block]
+    cfg: CFG
+    reverse_cfg: CFG
 
 
 def analyze(func: Function) -> ControlFlow:
     cf = ControlFlow()
     cf.leaders = _find_leaders(func)
     cf.blocks = _make_blocks(func, cf.leaders)
+    cf.cfg = _build_cfg(cf.blocks)
+    cf.reverse_cfg = cf.cfg.reversed()
     return cf
 
 
@@ -41,11 +105,11 @@ def _find_leaders(func: Function) -> set[Instruction]:
 
 def _make_blocks(func: Function, leaders: set[Instruction]) -> dict[Offset, Block]:
     blocks = {}
-    current: Block = []
+    current: list[Instruction] = []
 
     def flush() -> None:
         nonlocal current
-        blocks[current[0].func_offset] = current
+        blocks[current[0].func_offset] = Block(current)
         current = []
 
     for ins in func.instr_list:
@@ -54,4 +118,30 @@ def _make_blocks(func: Function, leaders: set[Instruction]) -> dict[Offset, Bloc
         current.append(ins)
     if current:
         flush()
+
     return blocks
+
+
+def _build_cfg(blocks: dict[Offset, Block]) -> CFG:
+    offsets = sorted(blocks)
+    exit_ = Block()
+    cfg = CFG(blocks[offsets[0]], exit_)
+
+    for i, off in enumerate(offsets):
+        bl = blocks[off]
+        if bl.term.opcode in _JUMPS:
+            # fallthrough first
+            if bl.term.opcode in _COND_JUMPS:
+                cfg.link(bl, blocks[offsets[i + 1]])
+
+            # then jump target
+            l = bl.term.get_label()
+            cfg.link(bl, blocks[l.to])
+        elif bl.term.opcode is Opcode.RET:
+            cfg.link(bl, exit_)
+        else:  # fallthrough
+            # we don't check for OOB since the last block
+            # is guaranteed to be terminate with a return.
+            cfg.link(bl, blocks[offsets[i + 1]])
+
+    return cfg
