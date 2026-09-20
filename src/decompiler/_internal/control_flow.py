@@ -72,9 +72,10 @@ class CFG:
 
     def reversed(self) -> CFG:
         result = CFG(self.exit, self.entry)
-        for bl in self.pred:
-            result.succ[bl].extend(result.pred[bl])
-            result.pred[bl].extend(result.succ[bl])
+        blocks = set(self.pred) | set(self.succ)
+        for bl in blocks:
+            result.succ[bl].extend(self.pred[bl])
+            result.pred[bl].extend(self.succ[bl])
         return result
 
 
@@ -99,9 +100,9 @@ def analyze(func: Function) -> ControlFlow:
     cf.blocks_list = list(cf.blocks.values())
     cf.cfg = _build_cfg(cf.blocks)
     cf.reverse_cfg = cf.cfg.reversed()
-    cf.dom = _find_dominators(cf.cfg, cf.blocks_list)
+    cf.dom = _find_dominators(cf.cfg, cf.blocks_list, cf.cfg.entry)
     cf.idom = _compute_idom(cf.dom)
-    cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list)
+    cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
     cf.ipdom = _compute_idom(cf.pdom)
     return cf
 
@@ -164,14 +165,14 @@ def _build_cfg(blocks: dict[Offset, Block]) -> CFG:
     return cfg
 
 
-def _find_dominators(cfg: CFG, blocks: list[Block]) -> Dominators:
+def _find_dominators(cfg: CFG, blocks: list[Block], entry: Block) -> Dominators:
     """
     Implements a naive algorithm for finding the dominators
     in a CFG. Has quadratic complexity O(V*E) in the worst case.
     In practice, usually converges in just a few runs.
     """
     dom: Dominators = {b: set(blocks) for b in blocks}
-    dom[cfg.entry] = {cfg.entry}
+    dom[entry] = {entry}
 
     changed = True
     iters = 0
