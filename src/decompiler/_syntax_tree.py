@@ -56,14 +56,36 @@ class StBreak(StStatement):
 
 @dataclass
 class StIf(StStatement):
+    cond: StExpression
+    then: list[StStatement]
+
     def emit(self, sw: StringWriter) -> None:
-        sw.print("if (false) {}")
+        sw.print("if (")
+        self.cond.emit(sw)
+        sw.println(") {")
+        sw.indent()
+        for s in self.then:
+            s.emit(sw)
+            sw.println()
+        sw.dedent()
+        sw.print("}")
 
 
 @dataclass
 class StWhile(StStatement):
+    cond: StExpression
+    body: list[StStatement]
+
     def emit(self, sw: StringWriter) -> None:
-        sw.print("while (false) {}")
+        sw.print("while (")
+        self.cond.emit(sw)
+        sw.println(") {")
+        sw.indent()
+        for s in self.body:
+            s.emit(sw)
+            sw.println()
+        sw.dedent()
+        sw.print("}")
 
 
 @dataclass

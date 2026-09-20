@@ -149,6 +149,7 @@ class Decompiler:
         for l in leaves:
             cfg.link(l, omega)
 
+        fs.blocks_list.append(omega)
         fs.cfg = cfg
         fs.revcfg = fs.cfg.reverse()
         fs.alpha = blocks[addresses[0]]
@@ -263,12 +264,14 @@ class Decompiler:
         fs.headers = headers
 
         for b in fs.blocks_list:
-            assert len(b.ins) > 0, "block must not be empty"
+            if b is fs.omega:
+                continue
             if b in fs.trampolines:
                 continue  # trampolines cannot be headers
             if b in fs.breaks:
                 continue  # breaks also cannot be headers
 
+            assert len(b.ins) > 0, "block must not be empty"
             last = b.ins[-1]
             if last.opcode is Opcode.JZ:
                 headers.add(b)  # JZ may be a switch or an ordinary if-else.
@@ -287,21 +290,22 @@ class Decompiler:
             if match is None:
                 continue
             regions[bl] = _Region(match, fs.blocks_between(match.header, match.join))
+            break
 
-        fs.stmts.extend(self._build_block(fs, fs.alpha))
+        fs.visited = set()
+        fs.stmts.extend(self.build_block(fs, fs.alpha))
 
-    def _build_block(
+    def build_block(
         self, fs: _FuncState, start: _Block, stop: _Block | None = None
     ) -> list[StStatement]:
         stmts = []
-        visited = set()
         bl = start
-        while bl is not None and bl != stop and bl not in visited:
-            visited.add(bl)
+        while bl is not None and bl != stop and bl not in fs.visited:
+            fs.visited.add(bl)
 
             if bl in fs.regions:
                 m = fs.regions[bl].match
-                stmts.append(m.build(fs, bl))
+                stmts.append(m.build(self, fs, bl))
                 bl = m.join
                 continue
 

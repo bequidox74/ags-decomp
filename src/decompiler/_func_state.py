@@ -58,6 +58,7 @@ class _FuncState:
     headers: set[_Block]
     stmts: list[StStatement]
     regions: dict[_Block, _Region]
+    visited: set[_Block]
     vm: _VM
 
     def __init__(self, func: Function) -> None:
