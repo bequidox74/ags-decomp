@@ -11,5 +11,5 @@ def decompile(disassembly: Disassembly) -> StScript:
 
 
 def _decompile_func(func: Function) -> StFunction:
-    cf = control_flow.analyze(func)
+    control_flow.analyze(func)
     return StFunction(func.name)

@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from decompiler.disassembler import Function, Instruction, Opcode
@@ -20,6 +21,8 @@ _COND_JUMPS = {
     Opcode.JZ,
     Opcode.JNZ,
 }
+
+_MATCHERS: tuple[Callable[..., Match | None], ...]
 
 
 @dataclass
@@ -48,7 +51,18 @@ class Block:
         return id(self.ins)
 
 
-@dataclass()
+@dataclass
+class Match:
+    header: Block
+    join: Block
+
+
+@dataclass
+class IfMatch(Match):
+    then: Block
+
+
+@dataclass
 class CFG:
     entry: Block
     exit: Block
@@ -67,7 +81,7 @@ class CFG:
     def fallthrough(self, b: Block) -> Block:
         return self.succ[b][0]
 
-    def jump(self, b: Block) -> Block:
+    def followed(self, b: Block) -> Block:
         return self.succ[b][1]
 
     def reversed(self) -> CFG:
@@ -77,6 +91,21 @@ class CFG:
             result.succ[bl].extend(self.pred[bl])
             result.pred[bl].extend(self.succ[bl])
         return result
+
+
+@dataclass
+class Region:
+    header: Block
+    join: Block
+
+
+@dataclass
+class IfRegion(Region):
+    body: list[Block]
+
+
+class IfElseRegion(Region):
+    body: list[Block]
 
 
 @dataclass(init=False)
@@ -92,6 +121,16 @@ class ControlFlow:
     pdom: Dominators  # postdominators
     ipdom: dict[Block, Block]  # immediate postdominators
 
+    loops: set[Block]
+    headers: dict[Block, Match]
+
+    def blocks_between(self, start: Block, stop: Block) -> list[Block]:
+        result = []
+        for bl in self.blocks_list:
+            if start in self.dom[bl] and stop in self.pdom[bl]:
+                result.append(bl)
+        return result
+
 
 def analyze(func: Function) -> ControlFlow:
     cf = ControlFlow()
@@ -104,6 +143,8 @@ def analyze(func: Function) -> ControlFlow:
     cf.idom = _compute_idom(cf.dom)
     cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
     cf.ipdom = _compute_idom(cf.pdom)
+    cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
+    cf.headers = _detect_headers(cf)
     return cf
 
 
@@ -202,3 +243,51 @@ def _compute_idom(dom: Dominators) -> ImDominators:
         if strict:
             idom[bl] = max(strict, key=lambda b: len(dom[b]))
     return idom
+
+
+def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
+    result = set()
+    for bl in blocks:
+        for suc in cfg.succ[bl]:
+            if suc in dom[bl]:
+                result.add(suc)
+    return result
+
+
+def _detect_headers(cf: ControlFlow) -> dict[Block, Match]:
+    matches: dict[Block, Match] = {}
+    # process innermost blocks first.
+    sorted_ = sorted(cf.blocks_list, key=lambda b: len(cf.dom[b]), reverse=True)
+    for bl in sorted_:
+        if not _is_potential_header(bl):
+            continue
+        for matcher in _MATCHERS:
+            result = matcher(bl, cf.cfg, cf.ipdom)
+            if result is not None:
+                matches[bl] = result
+    return matches
+
+
+def _is_potential_header(bl: Block) -> bool:
+    return bl.term.opcode in _JUMPS
+
+
+def _match_if(bl: Block, cfg: CFG, ipdom: ImDominators) -> Match | None:
+    term = bl.term
+    if term.opcode is not Opcode.JZ:
+        return None
+    body = cfg.fallthrough(bl)
+    skip = cfg.followed(bl)
+    join = ipdom[bl]
+    if skip != join:
+        return None
+    return IfMatch(bl, join, body)
+
+
+_MATCHERS = (
+    # _match_while,
+    # _match_do_while,
+    # _match_switch,
+    # _match_if_else,
+    _match_if,
+)
