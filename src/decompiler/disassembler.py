@@ -460,7 +460,7 @@ class Disassembly:
         if sw is None:
             sw = StringWriter()
 
-        sw.println(f";AGS SCOM version {self.version}")
+        sw.println(f"; AGS SCOM version {self.version}")
 
         # printing bytes isn't very elegant, but it's the only way to be sure
         # it's correct, at least until a proper analyzer is implemented.
@@ -479,7 +479,7 @@ class Disassembly:
             sw.println(f".code[{self.num_codes}]")
             for func in self.functions.values():
                 sw.print(func.mangled_name)
-                sw.print(": ;")
+                sw.print(": ; ")
                 sw.print(f"code offset=0x{func.code_offset:X}, ")
                 sw.print(f"script offset=0x{func.script_offset:X}")
                 sw.println()
@@ -488,8 +488,15 @@ class Disassembly:
                 sw.indent()
                 for item in func.instructions.values():
                     if offset in self.jumps:
+                        num_labels = len(self.jumps[offset])
+                        references: str
+                        if num_labels == 1:
+                            references = " ; 1 reference"
+                        else:
+                            references = f" ; {num_labels} references"
                         sw.dedent()
-                        sw.println(f"L{offset}_{func.name}:")
+                        sw.print(f"L{offset}_{func.name}:")
+                        sw.println(references)
                         sw.indent()
 
                     is_linenum = item.opcode == Opcode.LINENUM
@@ -498,7 +505,7 @@ class Disassembly:
                     sw.print(str(item))
                     if item.opcode in JUMPS:
                         l = item.get_label()
-                        sw.print(f" ;{item.opcode.mnemonic} {l.to - l.from_}")
+                        sw.print(f" ; {item.opcode.mnemonic} {l.to - l.from_}")
                     sw.println()
                     if is_linenum:
                         sw.indent()
@@ -509,7 +516,7 @@ class Disassembly:
 
         if self.strings:
             sw.cr()
-            sw.println(f".strings[{self.len_strings}] ;{len(self.strings)} strings")
+            sw.println(f".strings[{self.len_strings}] ; {len(self.strings)} strings")
             for i, (o, s) in enumerate(self.strings.items()):
                 sw.println(f"{i}@0x{o:X}: {quote(s)}")
             sw.println()
@@ -517,7 +524,7 @@ class Disassembly:
         if self.imports:
             sw.cr()
             referenced = sum(bool(i) for i in self.imports)
-            comment = f" ;{self.num_imports} names, {referenced} referenced"
+            comment = f" ; {self.num_imports} names, {referenced} referenced"
             sw.println(f".imports[{self.num_imports}]{comment}")
             for o, name in enumerate(self.imports):
                 if not name:
@@ -529,7 +536,7 @@ class Disassembly:
             sw.cr()
             sw.println(f".exports[{self.num_exports}]")
             for export in self.exports.values():
-                comment = f" ;{export.type.repr} "
+                comment = f" ; {export.type.repr} "
                 sw.println(f"{export.address}: ({export.type}) {export.name}{comment}")
             sw.println()
 
