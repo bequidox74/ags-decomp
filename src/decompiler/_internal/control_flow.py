@@ -76,8 +76,7 @@ class IfElseMatch(Match):
 
 @dataclass
 class SwitchMatch(Match):
-    cases: list[Block]
-    bodies: list[Block]
+    cases: dict[Block, Block]
 
 
 @dataclass
@@ -136,8 +135,78 @@ class ControlFlow:
 
 
 class Matcher:
-    def __init__(self, cf: ControlFlow) -> None:
-        pass
+    def __init__(self) -> None:
+        self._matched: set[Block] = set()
+        self._matchers = (
+            self._match_switch,
+            self._match_if_else,
+            self._match_if,
+        )
+
+    def find_headers(self, cf: ControlFlow) -> dict[Block, Match]:
+        matches: dict[Block, Match] = {}
+        # process innermost blocks first.
+        sorted_ = sorted(cf.blocks_list, key=lambda b: len(cf.dom[b]), reverse=True)
+        for bl in sorted_:
+            if bl in self._matched:
+                continue
+            if not self._is_potential_header(bl):
+                continue
+            for matcher in self._matchers:
+                result = matcher(bl, cf)
+                if result is not None:
+                    matches[bl] = result
+                    break
+        return matches
+
+    def _is_potential_header(self, bl: Block) -> bool:
+        return bl.term.opcode in _COND_JUMPS
+
+    def _match_switch(self, bl: Block, cf: ControlFlow) -> Match | None:
+        if len(bl.ins) < 2:
+            return None
+        join = cf.ipdom[bl]
+
+        # case conditions are nested inside one another in the dominator tree,
+        # so given our order of iteration (innermost-first), we should assume
+        # the current block is the last in the chain.
+        cases: list[Block] = []
+        bodies: list[Block] = []
+        s = bl
+        while s is not None:
+            if len(s.ins) < 2:
+                break
+            cmp = s.ins[-2]
+            if cmp.opcode not in _SWITCH_CMP:
+                break
+            cases.append(s)
+            bodies.append(cf.cfg.followed(s))
+            self._matched.add(s)
+            s = cf.cfg.pred[s][0]
+        cases = cases[::-1]
+        bodies = bodies[::-1]
+
+        return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)})
+
+    def _match_if_else(self, bl: Block, cf: ControlFlow) -> Match | None:
+        then = cf.cfg.fallthrough(bl)
+        else_ = cf.cfg.followed(bl)
+        join = cf.ipdom[bl]
+        if then == join or else_ == join:
+            return None
+        self._matched.add(bl)
+        if join == cf.cfg.exit:
+            return IfMatch(bl, join, then)
+        return IfElseMatch(bl, join, then, else_)
+
+    def _match_if(self, bl: Block, cf: ControlFlow) -> Match | None:
+        body = cf.cfg.fallthrough(bl)
+        skip = cf.cfg.followed(bl)
+        join = cf.ipdom[bl]
+        if skip != join:
+            return None
+        self._matched.add(bl)
+        return IfMatch(bl, join, body)
 
 
 def analyze(func: Function) -> ControlFlow:
@@ -152,7 +221,7 @@ def analyze(func: Function) -> ControlFlow:
     cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
     cf.ipdom = _compute_idom(cf.pdom)
     cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
-    cf.headers = _detect_headers(cf)
+    cf.headers = Matcher().find_headers(cf)
     return cf
 
 
@@ -260,81 +329,3 @@ def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
             if suc in dom[bl]:
                 result.add(suc)
     return result
-
-
-def _detect_headers(cf: ControlFlow) -> dict[Block, Match]:
-    matches: dict[Block, Match] = {}
-    # process innermost blocks first.
-    sorted_ = sorted(cf.blocks_list, key=lambda b: len(cf.dom[b]), reverse=True)
-    for bl in sorted_:
-        if not _is_potential_header(bl):
-            continue
-        for matcher in _MATCHERS:
-            result = matcher(bl, cf)
-            if result is not None:
-                matches[bl] = result
-                break
-    return matches
-
-
-def _is_potential_header(bl: Block) -> bool:
-    return bl.term.opcode in _COND_JUMPS
-
-
-def _match_switch(bl: Block, cf: ControlFlow) -> Match | None:
-    if len(bl.ins) < 2:
-        return None
-
-    cmp = bl.ins[-2]
-    if cmp.opcode not in _SWITCH_CMP:
-        return None
-    join = cf.ipdom[bl]
-
-    # case conditions are nested inside one another in the dominator tree,
-    # so given our order of iteration (innermost-first), we should assume
-    # the current block is the last in the chain.
-    cases: list[Block] = []
-    bodies: list[Block] = []
-    s = bl
-    while s is not None:
-        if len(s.ins) < 2:
-            break
-        cmp = s.ins[-2]
-        if cmp.opcode not in _SWITCH_CMP:
-            break
-        cases.append(s)
-        bodies.append(cf.cfg.followed(s))
-        s = cf.cfg.pred[s][0]
-    cases = cases[::-1]
-    bodies = bodies[::-1]
-
-    return SwitchMatch(bl, join, cases, bodies)
-
-
-def _match_if_else(bl: Block, cf: ControlFlow) -> Match | None:
-    then = cf.cfg.fallthrough(bl)
-    else_ = cf.cfg.followed(bl)
-    join = cf.ipdom[bl]
-    if then == join or else_ == join:
-        return None
-    if join == cf.cfg.exit:
-        return IfMatch(bl, join, then)
-    return IfElseMatch(bl, join, then, else_)
-
-
-def _match_if(bl: Block, cf: ControlFlow) -> Match | None:
-    body = cf.cfg.fallthrough(bl)
-    skip = cf.cfg.followed(bl)
-    join = cf.ipdom[bl]
-    if skip != join:
-        return None
-    return IfMatch(bl, join, body)
-
-
-_MATCHERS = (
-    # _match_while,
-    # _match_do_while,
-    _match_switch,
-    _match_if_else,
-    _match_if,
-)
