@@ -1,6 +1,5 @@
 import logging
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from decompiler.disassembler import Function, Instruction, Opcode
@@ -75,6 +74,7 @@ class IfElseMatch(Match):
 @dataclass
 class SwitchMatch(Match):
     cases: dict[Block, Block]
+    default: Block | None
 
 
 @dataclass
@@ -170,8 +170,8 @@ class Matcher:
                 if result is not None:
                     matches[bl] = result
                     break
-        # for l in self.loops:
-        #     assert isinstance(matches[l], WhileMatch | DoWhileMatch)
+        for l in self.loops:
+            assert isinstance(matches[l], WhileMatch | DoWhileMatch)
         return matches
 
     def _is_potential_header(self, bl: Block) -> bool:
@@ -214,11 +214,18 @@ class Matcher:
         return DoWhileMatch(body, join, cond)
 
     def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
-        if bl.term.opcode is not Opcode.JZ:
-            return None
-        if len(bl.ins) < 2:
-            return None
-        join = cf.ipdom[bl]
+        if not cf.cfg.pred[bl]:
+            return None  # skip dead code
+        if bl.term.opcode is Opcode.JMP:
+            # if it ends with a jump, check that the previous block
+            # is a single jump (i.e. the dispatch).
+            pred = cf.cfg.pred[bl][0]
+            if len(pred.ins) == 1 and pred.term.opcode is not Opcode.JMP:
+                return None
+
+        default: Block | None = None
+        if bl.term.opcode is Opcode.JMP and bl not in cf.trampolines:
+            default = cf.cfg.succ[bl][0]
 
         # case conditions are nested inside one another in the dominator tree,
         # so given our order of iteration (innermost-first), we should assume
@@ -239,9 +246,12 @@ class Matcher:
         cases = cases[::-1]
         bodies = bodies[::-1]
 
-        if not cases:
+        join = cf.ipdom[bl]
+        if not cases and default is None:
             return None
-        return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)})
+
+        # a switch can either end in a JZ block (normal case), or a JMP block (default).
+        return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)}, default)
 
     def _match_if_else(
         self, bl: Block, cf: ControlFlow
