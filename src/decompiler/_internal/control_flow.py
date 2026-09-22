@@ -86,6 +86,11 @@ class WhileMatch(Match):
 
 
 @dataclass
+class DoWhileMatch(Match):
+    cond: Block
+
+
+@dataclass
 class CFG:
     entry: Block
     exit: Block
@@ -146,6 +151,7 @@ class Matcher:
         self._matched: set[Block] = set()
         self._matchers = (
             self._match_while,
+            self._match_do_while,
             self._match_switch,
             self._match_if_else,
             self._match_if,
@@ -165,20 +171,24 @@ class Matcher:
                 if result is not None:
                     matches[bl] = result
                     break
+        # for l in self.loops:
+        #     assert isinstance(matches[l], WhileMatch | DoWhileMatch)
         return matches
 
     def _is_potential_header(self, bl: Block) -> bool:
-        return bl in self.loops or bl.term.opcode in _COND_JUMPS
+        return bl in self.loops or bl.term.opcode in _JUMPS
 
     def _match_while(self, bl: Block, cf: ControlFlow) -> Match | None:
         if bl not in self.loops:
             return None
 
         jump: Block = bl
-        # depending on whether there's a break in the body, it may
-        # or may not end with a JZ, so need to check the fallthrough too.
+        # depending on whether there's a break in the body, it may or
+        # may not end with a JZ, so we need to check the fallthrough too.
         if bl.term.opcode is not Opcode.JZ:
             s = cf.cfg.fallthrough(bl)
+            if not s.ins:
+                return None
             if s.term.opcode is not Opcode.JZ:
                 return None
             jump = s
@@ -193,7 +203,18 @@ class Matcher:
 
         return WhileMatch(bl, join, body, jump)
 
-    def _match_switch(self, bl: Block, cf: ControlFlow) -> Match | None:
+    def _match_do_while(self, bl: Block, cf: ControlFlow) -> DoWhileMatch | None:
+        if bl.term.opcode is not Opcode.JNZ:
+            return None
+        body = cf.cfg.followed(bl)
+        if body not in self.loops:
+            return None
+        join = cf.ipdom[bl]
+        assert cf.cfg.fallthrough(bl) is join
+        cond = bl
+        return DoWhileMatch(body, join, cond)
+
+    def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
         if bl.term.opcode is not Opcode.JZ:
             return None
         if len(bl.ins) < 2:
@@ -219,9 +240,13 @@ class Matcher:
         cases = cases[::-1]
         bodies = bodies[::-1]
 
+        if not cases:
+            return None
         return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)})
 
-    def _match_if_else(self, bl: Block, cf: ControlFlow) -> Match | None:
+    def _match_if_else(
+        self, bl: Block, cf: ControlFlow
+    ) -> IfElseMatch | IfMatch | None:
         if bl.term.opcode is not Opcode.JZ:
             return None
         then = cf.cfg.fallthrough(bl)
@@ -229,12 +254,11 @@ class Matcher:
         join = cf.ipdom[bl]
         if then == join or else_ == join:
             return None
-        self._matched.add(bl)
         if join == cf.cfg.exit:
             return IfMatch(bl, join, then)
         return IfElseMatch(bl, join, then, else_)
 
-    def _match_if(self, bl: Block, cf: ControlFlow) -> Match | None:
+    def _match_if(self, bl: Block, cf: ControlFlow) -> IfMatch | None:
         if bl.term.opcode is not Opcode.JZ:
             return None
         body = cf.cfg.fallthrough(bl)
@@ -242,7 +266,6 @@ class Matcher:
         join = cf.ipdom[bl]
         if skip != join:
             return None
-        self._matched.add(bl)
         return IfMatch(bl, join, body)
 
 
@@ -363,6 +386,8 @@ def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
     result = set()
     for bl in blocks:
         for suc in cfg.succ[bl]:
+            if not cfg.pred[bl]:
+                continue  # skip dead jumps from unbroken do-while loops.
             if suc in dom[bl]:
                 result.add(suc)
     return result
