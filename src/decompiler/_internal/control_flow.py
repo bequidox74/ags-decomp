@@ -220,7 +220,7 @@ class Matcher:
             # if it ends with a jump, check that the previous block
             # is a single jump (i.e. the dispatch).
             pred = cf.cfg.pred[bl][0]
-            if len(pred.ins) == 1 and pred.term.opcode is not Opcode.JMP:
+            if len(pred.ins) != 1 and pred.term.opcode is not Opcode.JMP:
                 return None
 
         default: Block | None = None
@@ -315,7 +315,7 @@ def _make_blocks(func: Function, leaders: set[Instruction]) -> dict[Offset, Bloc
 
     def flush() -> None:
         nonlocal current
-        blocks[current[0].func_offset] = Block(current)
+        blocks[current[0].code_offset] = Block(current)
         current = []
 
     for ins in func.instr_list:
