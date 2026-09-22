@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 type Offset = int
 type Dominators = dict[Block, set[Block]]
 type ImDominators = dict[Block, Block]
+type DomTree = dict[Block, list[Block]]
 
 _JUMPS = {
     Opcode.JMP,
@@ -22,7 +23,12 @@ _COND_JUMPS = {
     Opcode.JNZ,
 }
 
-_MATCHERS: tuple[Callable[..., Match | None], ...]
+_SWITCH_CMP = {
+    Opcode.NOTEQUAL,
+    Opcode.STRINGSNOTEQ,
+}
+
+_MATCHERS: tuple[Callable[[Block, ControlFlow], Match | None], ...]
 
 
 @dataclass
@@ -63,6 +69,18 @@ class IfMatch(Match):
 
 
 @dataclass
+class IfElseMatch(Match):
+    then: Block
+    else_: Block
+
+
+@dataclass
+class SwitchMatch(Match):
+    cases: list[Block]
+    bodies: list[Block]
+
+
+@dataclass
 class CFG:
     entry: Block
     exit: Block
@@ -93,21 +111,6 @@ class CFG:
         return result
 
 
-@dataclass
-class Region:
-    header: Block
-    join: Block
-
-
-@dataclass
-class IfRegion(Region):
-    body: list[Block]
-
-
-class IfElseRegion(Region):
-    body: list[Block]
-
-
 @dataclass(init=False)
 class ControlFlow:
     leaders: set[Instruction]
@@ -130,6 +133,11 @@ class ControlFlow:
             if start in self.dom[bl] and stop in self.pdom[bl]:
                 result.append(bl)
         return result
+
+
+class Matcher:
+    def __init__(self, cf: ControlFlow) -> None:
+        pass
 
 
 def analyze(func: Function) -> ControlFlow:
@@ -262,23 +270,62 @@ def _detect_headers(cf: ControlFlow) -> dict[Block, Match]:
         if not _is_potential_header(bl):
             continue
         for matcher in _MATCHERS:
-            result = matcher(bl, cf.cfg, cf.ipdom)
+            result = matcher(bl, cf)
             if result is not None:
                 matches[bl] = result
+                break
     return matches
 
 
 def _is_potential_header(bl: Block) -> bool:
-    return bl.term.opcode in _JUMPS
+    return bl.term.opcode in _COND_JUMPS
 
 
-def _match_if(bl: Block, cfg: CFG, ipdom: ImDominators) -> Match | None:
-    term = bl.term
-    if term.opcode is not Opcode.JZ:
+def _match_switch(bl: Block, cf: ControlFlow) -> Match | None:
+    if len(bl.ins) < 2:
         return None
-    body = cfg.fallthrough(bl)
-    skip = cfg.followed(bl)
-    join = ipdom[bl]
+
+    cmp = bl.ins[-2]
+    if cmp.opcode not in _SWITCH_CMP:
+        return None
+    join = cf.ipdom[bl]
+
+    # case conditions are nested inside one another in the dominator tree,
+    # so given our order of iteration (innermost-first), we should assume
+    # the current block is the last in the chain.
+    cases: list[Block] = []
+    bodies: list[Block] = []
+    s = bl
+    while s is not None:
+        if len(s.ins) < 2:
+            break
+        cmp = s.ins[-2]
+        if cmp.opcode not in _SWITCH_CMP:
+            break
+        cases.append(s)
+        bodies.append(cf.cfg.followed(s))
+        s = cf.cfg.pred[s][0]
+    cases = cases[::-1]
+    bodies = bodies[::-1]
+
+    return SwitchMatch(bl, join, cases, bodies)
+
+
+def _match_if_else(bl: Block, cf: ControlFlow) -> Match | None:
+    then = cf.cfg.fallthrough(bl)
+    else_ = cf.cfg.followed(bl)
+    join = cf.ipdom[bl]
+    if then == join or else_ == join:
+        return None
+    if join == cf.cfg.exit:
+        return IfMatch(bl, join, then)
+    return IfElseMatch(bl, join, then, else_)
+
+
+def _match_if(bl: Block, cf: ControlFlow) -> Match | None:
+    body = cf.cfg.fallthrough(bl)
+    skip = cf.cfg.followed(bl)
+    join = cf.ipdom[bl]
     if skip != join:
         return None
     return IfMatch(bl, join, body)
@@ -287,7 +334,7 @@ def _match_if(bl: Block, cfg: CFG, ipdom: ImDominators) -> Match | None:
 _MATCHERS = (
     # _match_while,
     # _match_do_while,
-    # _match_switch,
-    # _match_if_else,
+    _match_switch,
+    _match_if_else,
     _match_if,
 )
