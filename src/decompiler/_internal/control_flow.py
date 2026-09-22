@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from decompiler.disassembler import Function, Instruction, Opcode
-from decompiler.syntax_tree import StDoWhile, StIfElse, StStatement, StSwitch, StWhile
+from decompiler.syntax_tree import (
+    StBreak,
+    StDoWhile,
+    StIfElse,
+    StStatement,
+    StSwitch,
+    StWhile,
+)
 
 if TYPE_CHECKING:
     from decompiler._internal.recovery import Structurer
@@ -96,9 +103,10 @@ class SwitchMatch(Match):
     default: Block | None
 
     def structure(self, structurer: Structurer) -> StSwitch:
-        cases = []
+        cases: list[list[StStatement]] = []
         for c in self.cases.values():
             cases.append(structurer.build_region(c, self.join))
+        cases[-1].append(StBreak())
         return StSwitch(cases)
 
 
@@ -284,7 +292,9 @@ class _Matcher:
             return None
 
         # a switch can either end in a JZ block (normal case), or a JMP block (default).
-        return SwitchMatch(cases[0], join, {c[0]: c[1] for c in zip(cases, bodies)}, default)
+        return SwitchMatch(
+            cases[0], join, {c[0]: c[1] for c in zip(cases, bodies)}, default
+        )
 
     def _match_if_else(
         self, bl: Block, cf: ControlFlow

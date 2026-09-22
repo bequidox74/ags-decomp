@@ -66,6 +66,12 @@ class StDoWhile(StStatement):
 
 
 @dataclass
+class StBreak(StStatement):
+    def emit(self, sw: StringWriter) -> None:
+        sw.print("break;")
+
+
+@dataclass
 class StSwitch(StStatement):
     cases: list[list[StStatement]]
 

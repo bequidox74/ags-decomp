@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 
 from decompiler.disassembler import Function
-from decompiler.syntax_tree import StFunction, StStatement
+from decompiler.syntax_tree import StBreak, StFunction, StStatement
 
 if TYPE_CHECKING:
     from decompiler._internal.control_flow import Block, ControlFlow
@@ -26,6 +26,8 @@ class Structurer:
             if bl in self._visited:
                 break
             self._visited.add(bl)
+            if bl in self.cf.trampolines:
+                stmts.append(StBreak())
             if bl in self.cf.headers:
                 stmts.append(self.cf.headers[bl].structure(self))
                 continue
