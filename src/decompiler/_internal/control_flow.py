@@ -28,8 +28,6 @@ _SWITCH_CMP = {
     Opcode.STRINGSNOTEQ,
 }
 
-_MATCHERS: tuple[Callable[[Block, ControlFlow], Match | None], ...]
-
 
 @dataclass
 class Block:
@@ -136,6 +134,7 @@ class ControlFlow:
 
     loops: set[Block]
     headers: dict[Block, Match]
+    trampolines: dict[Block, Block]
 
     def blocks_between(self, start: Block, stop: Block) -> list[Block]:
         result = []
@@ -280,6 +279,7 @@ def analyze(func: Function) -> ControlFlow:
     cf.idom = _compute_idom(cf.dom)
     cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
     cf.ipdom = _compute_idom(cf.pdom)
+    _resolve_jump_chains(cf)
     cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
     cf.headers = Matcher(cf.loops).find_headers(cf)
     return cf
@@ -380,6 +380,21 @@ def _compute_idom(dom: Dominators) -> ImDominators:
         if strict:
             idom[bl] = max(strict, key=lambda b: len(dom[b]))
     return idom
+
+
+def _resolve_jump_chains(cf: ControlFlow) -> None:
+    def is_jump(b: Block) -> bool:
+        return len(b.ins) == 1 and b.term.opcode is Opcode.JMP
+
+    cf.trampolines = {}
+    for bl in cf.blocks_list:
+        if bl.term.opcode is not Opcode.JMP:
+            continue
+        s = cf.cfg.succ[bl][0]
+        jump = s
+        while is_jump(s):
+            s = cf.cfg.succ[s][0]
+            cf.trampolines[jump] = s
 
 
 def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
