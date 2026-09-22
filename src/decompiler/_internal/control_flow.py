@@ -80,6 +80,12 @@ class SwitchMatch(Match):
 
 
 @dataclass
+class WhileMatch(Match):
+    body: Block
+    jump: Block
+
+
+@dataclass
 class CFG:
     entry: Block
     exit: Block
@@ -135,9 +141,11 @@ class ControlFlow:
 
 
 class Matcher:
-    def __init__(self) -> None:
+    def __init__(self, loops: set[Block]) -> None:
+        self.loops = loops
         self._matched: set[Block] = set()
         self._matchers = (
+            self._match_while,
             self._match_switch,
             self._match_if_else,
             self._match_if,
@@ -160,9 +168,34 @@ class Matcher:
         return matches
 
     def _is_potential_header(self, bl: Block) -> bool:
-        return bl.term.opcode in _COND_JUMPS
+        return bl in self.loops or bl.term.opcode in _COND_JUMPS
+
+    def _match_while(self, bl: Block, cf: ControlFlow) -> Match | None:
+        if bl not in self.loops:
+            return None
+
+        jump: Block = bl
+        # depending on whether there's a break in the body, it may
+        # or may not end with a JZ, so need to check the fallthrough too.
+        if bl.term.opcode is not Opcode.JZ:
+            s = cf.cfg.fallthrough(bl)
+            if s.term.opcode is not Opcode.JZ:
+                return None
+            jump = s
+
+        join = cf.ipdom[bl]
+        body = cf.cfg.fallthrough(jump)
+
+        if body.term.opcode is not Opcode.JMP:
+            return None
+        if body.term.get_label().to != bl.ins[0].code_offset:
+            return None
+
+        return WhileMatch(bl, join, body, jump)
 
     def _match_switch(self, bl: Block, cf: ControlFlow) -> Match | None:
+        if bl.term.opcode is not Opcode.JZ:
+            return None
         if len(bl.ins) < 2:
             return None
         join = cf.ipdom[bl]
@@ -189,6 +222,8 @@ class Matcher:
         return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)})
 
     def _match_if_else(self, bl: Block, cf: ControlFlow) -> Match | None:
+        if bl.term.opcode is not Opcode.JZ:
+            return None
         then = cf.cfg.fallthrough(bl)
         else_ = cf.cfg.followed(bl)
         join = cf.ipdom[bl]
@@ -200,6 +235,8 @@ class Matcher:
         return IfElseMatch(bl, join, then, else_)
 
     def _match_if(self, bl: Block, cf: ControlFlow) -> Match | None:
+        if bl.term.opcode is not Opcode.JZ:
+            return None
         body = cf.cfg.fallthrough(bl)
         skip = cf.cfg.followed(bl)
         join = cf.ipdom[bl]
@@ -221,7 +258,7 @@ def analyze(func: Function) -> ControlFlow:
     cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
     cf.ipdom = _compute_idom(cf.pdom)
     cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
-    cf.headers = Matcher().find_headers(cf)
+    cf.headers = Matcher(cf.loops).find_headers(cf)
     return cf
 
 
