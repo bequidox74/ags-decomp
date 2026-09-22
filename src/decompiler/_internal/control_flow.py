@@ -201,7 +201,7 @@ class _Matcher:
             for matcher in self._matchers:
                 result = matcher(bl, cf)
                 if result is not None:
-                    matches[bl] = result
+                    matches[result.header] = result
                     break
         for l in self.loops:
             assert isinstance(matches[l], WhileMatch | DoWhileMatch)
@@ -284,7 +284,7 @@ class _Matcher:
             return None
 
         # a switch can either end in a JZ block (normal case), or a JMP block (default).
-        return SwitchMatch(bl, join, {c[0]: c[1] for c in zip(cases, bodies)}, default)
+        return SwitchMatch(cases[0], join, {c[0]: c[1] for c in zip(cases, bodies)}, default)
 
     def _match_if_else(
         self, bl: Block, cf: ControlFlow
