@@ -106,8 +106,12 @@ class SwitchMatch(Match):
         cases: list[list[StStatement]] = []
         for c in self.cases.values():
             cases.append(structurer.build_region(c, self.join))
-        cases[-1].append(StBreak())
-        return StSwitch(cases)
+
+        default = None
+        if self.default is not None:
+            default = structurer.build_region(self.default, self.join)
+        # cases[-1].append(StBreak())
+        return StSwitch(cases, default)
 
 
 @dataclass

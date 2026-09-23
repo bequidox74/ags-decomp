@@ -74,6 +74,7 @@ class StBreak(StStatement):
 @dataclass
 class StSwitch(StStatement):
     cases: list[list[StStatement]]
+    default: list[StStatement] | None
 
     def emit(self, sw: StringWriter) -> None:
         sw.println("switch (0) {")
@@ -84,6 +85,14 @@ class StSwitch(StStatement):
                 s.emit(sw)
                 sw.println()
             sw.dedent()
+
+            if self.default is not None:
+                sw.println("default:")
+                sw.indent()
+                for s in self.default:
+                    s.emit(sw)
+                    sw.println()
+                sw.dedent()
         sw.print("}")
 
 
