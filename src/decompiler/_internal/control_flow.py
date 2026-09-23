@@ -1,20 +1,9 @@
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from decompiler.disassembler import Function, Instruction, Opcode, Register
-from decompiler.syntax_tree import (
-    StDoWhile,
-    StIfElse,
-    StStatement,
-    StSwitch,
-    StWhile,
-)
-
-if TYPE_CHECKING:
-    from decompiler._internal.structurer import Structurer
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +63,10 @@ class Match(ABC):
     header: Block
     join: Block
 
-    @abstractmethod
-    def structure(self, structurer: Structurer) -> StStatement:
-        raise NotImplementedError
-
 
 @dataclass
 class IfMatch(Match):
     then: Block
-
-    def structure(self, structurer: Structurer) -> StIfElse:
-        stmts = structurer.build_region(self.then, self.join)
-        return StIfElse(stmts)
 
 
 @dataclass
@@ -93,27 +74,11 @@ class IfElseMatch(Match):
     then: Block
     else_: Block
 
-    def structure(self, structurer: Structurer) -> StIfElse:
-        then_stmts = structurer.build_region(self.then, self.join)
-        else_stmts = structurer.build_region(self.else_, self.join)
-        return StIfElse(then_stmts, else_stmts)
-
 
 @dataclass
 class SwitchMatch(Match):
     cases: dict[Block, Block]
     default: Block | None
-
-    def structure(self, structurer: Structurer) -> StSwitch:
-        cases: list[list[StStatement]] = []
-        for c in self.cases.values():
-            cases.append(structurer.build_region(c, self.join))
-
-        default = None
-        if self.default is not None:
-            default = structurer.build_region(self.default, self.join)
-
-        return StSwitch(cases, default)
 
 
 @dataclass
@@ -121,18 +86,10 @@ class WhileMatch(Match):
     body: Block
     jump: Block
 
-    def structure(self, structurer: Structurer) -> StWhile:
-        stmts = structurer.build_region(self.body, self.join)
-        return StWhile(stmts)
-
 
 @dataclass
 class DoWhileMatch(Match):
     cond: Block
-
-    def structure(self, structurer: Structurer) -> StDoWhile:
-        stmts = structurer.build_region(self.header, self.join)
-        return StDoWhile(stmts)
 
 
 @dataclass

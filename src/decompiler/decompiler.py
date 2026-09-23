@@ -20,7 +20,7 @@ def decompile_func(func: Function) -> StFunction | None:
     logger.info("decompiling %s", func.mangled_name)
     try:
         cf = control_flow.analyze(func)
-        return structurer.recover(func, cf)
+        return structurer.structure(func, cf)
     except Exception:  # pylint: disable=broad-exception-caught
         # logger.error("error while decompiling %s", func.mangled_name)
         logger.exception("error while decompiling %s", func.mangled_name)
