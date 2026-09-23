@@ -1,10 +1,10 @@
 from typing import TYPE_CHECKING
 
-from decompiler.disassembler import Function
+from decompiler.disassembler import Function, Opcode
 from decompiler.syntax_tree import StBreak, StFunction, StStatement
 
 if TYPE_CHECKING:
-    from decompiler._internal.control_flow import Block, ControlFlow
+    from decompiler._internal.control_flow import Block, ControlFlow, Match
 
 
 class Structurer:
@@ -12,6 +12,7 @@ class Structurer:
         self._visited: set[Block] = set()
         self.func = func
         self.cf = cf
+        self.constructs: list[Match] = []
 
     def structure(self) -> StFunction:
         stmts = self.build_region(self.cf.cfg.entry)
@@ -23,13 +24,17 @@ class Structurer:
         stmts: list[StStatement] = []
         bl: Block | None = start
         while bl is not None and bl is not stop:
-            if bl in self.cf.trampolines:
-                stmts.append(StBreak())
-                bl = self._next_block(bl)
-                continue
             if bl in self._visited:
                 break
             self._visited.add(bl)
+            if len(bl) == 1 and bl.term.opcode is Opcode.JMP:
+                bl = self._next_block(bl)
+                try:
+                    if bl == self.constructs[-1].join:
+                        stmts.append(StBreak())
+                except IndexError:
+                    pass
+                continue
             if bl in self.cf.headers:
                 stmts.append(self.cf.headers[bl].structure(self))
                 continue

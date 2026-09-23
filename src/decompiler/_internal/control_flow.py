@@ -106,6 +106,7 @@ class SwitchMatch(Match):
     default: Block | None
 
     def structure(self, structurer: Structurer) -> StSwitch:
+        structurer.constructs.append(self)
         cases: list[list[StStatement]] = []
         for c in self.cases.values():
             cases.append(structurer.build_region(c, self.join))
@@ -118,6 +119,7 @@ class SwitchMatch(Match):
             default.append(StBreak())
         elif cases:
             cases[-1].append(StBreak())
+        structurer.constructs.pop()
         return StSwitch(cases, default)
 
 
@@ -280,6 +282,7 @@ class _Matcher:
             except IndexError:
                 return None
             return self._match_switch(pred, cf)
+        return result
 
     def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
         # all switches start with two consecutive JMPs (dispatch + break trampoline).
@@ -306,6 +309,7 @@ class _Matcher:
         except IndexError:
             return None
 
+        self._matched.add(bl)
         # the second is the join of the switch.
         join = cf.blocks[i2.get_label().to]
         # the first jump is the beginning of the dispatch block.
@@ -328,7 +332,7 @@ class _Matcher:
         self._matched.add(dispatch)
         if default is not None:
             self._matched.add(default)
-        cases = {cf.cfg.succ[l][0]: l for l in labels}
+        cases = {l: cf.cfg.followed(l) for l in labels}
         for case, body in cases.items():
             self._matched.add(case)
             self._matched.add(body)
