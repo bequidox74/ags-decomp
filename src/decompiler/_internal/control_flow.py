@@ -371,9 +371,9 @@ def analyze(func: Function) -> ControlFlow:
     cf.blocks_list = list(cf.blocks.values())
     cf.cfg = _build_cfg(cf.blocks)
     cf.reverse_cfg = cf.cfg.reversed()
-    cf.dom = _find_dominators(cf.cfg, cf.blocks_list, cf.cfg.entry)
+    cf.dom = _find_dominators(cf.cfg, cf.blocks_list, cf.cfg.entry, False)
     cf.idom = _compute_idom(cf.dom)
-    cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit)
+    cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit, True)
     cf.ipdom = _compute_idom(cf.pdom)
     _resolve_jump_chains(cf)
     cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
@@ -439,7 +439,9 @@ def _build_cfg(blocks: dict[Offset, Block]) -> CFG:
     return cfg
 
 
-def _find_dominators(cfg: CFG, blocks: list[Block], entry: Block) -> Dominators:
+def _find_dominators(
+    cfg: CFG, blocks: list[Block], entry: Block, reverse: bool
+) -> Dominators:
     """
     Implements a naive algorithm for finding the dominators
     in a CFG. Has quadratic complexity O(V*E) in the worst case.
@@ -453,7 +455,8 @@ def _find_dominators(cfg: CFG, blocks: list[Block], entry: Block) -> Dominators:
     while changed:
         iters += 1
         changed = False
-        for bl, bl_dom in dom.items():
+        items = dom.items() if not reverse else reversed(dom.items())
+        for bl, bl_dom in items:
             if bl is cfg.entry:
                 continue  # skip the entry; it trivially dominates everything.
             pred = cfg.pred[bl]

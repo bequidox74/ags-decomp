@@ -10,11 +10,13 @@ logger = logging.getLogger(__name__)
 def decompile(disassembly: Disassembly) -> StScript:
     funcs: list[StFunction] = []
     for f in disassembly.functions.values():
-        funcs.append(_decompile_func(f))
+        result = decompile_func(f)
+        if result is not None:
+            funcs.append(result)
     return StScript(funcs)
 
 
-def _decompile_func(func: Function) -> StFunction:
+def decompile_func(func: Function) -> StFunction | None:
     logger.info("decompiling %s", func.mangled_name)
     try:
         cf = control_flow.analyze(func)
