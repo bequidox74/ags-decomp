@@ -292,8 +292,10 @@ class _Matcher:
             return None
 
         # a switch can either end in a JZ block (normal case), or a JMP block (default).
+        header = cases[0] if cases else default
+        assert header is not None
         return SwitchMatch(
-            cases[0], join, {c[0]: c[1] for c in zip(cases, bodies)}, default
+            header, join, {c[0]: c[1] for c in zip(cases, bodies)}, default
         )
 
     def _match_if_else(
