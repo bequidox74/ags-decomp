@@ -23,11 +23,13 @@ class Structurer:
         stmts: list[StStatement] = []
         bl: Block | None = start
         while bl is not None and bl is not stop:
+            if bl in self.cf.trampolines:
+                stmts.append(StBreak())
+                bl = self._next_block(bl)
+                continue
             if bl in self._visited:
                 break
             self._visited.add(bl)
-            if bl in self.cf.trampolines:
-                stmts.append(StBreak())
             if bl in self.cf.headers:
                 stmts.append(self.cf.headers[bl].structure(self))
                 continue

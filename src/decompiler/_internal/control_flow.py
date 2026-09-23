@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from decompiler.disassembler import Function, Instruction, Opcode
 from decompiler.syntax_tree import (
-    StBreak,
     StDoWhile,
     StIfElse,
     StStatement,
@@ -442,18 +441,19 @@ def _compute_idom(dom: Dominators) -> ImDominators:
 
 
 def _resolve_jump_chains(cf: ControlFlow) -> None:
-    def is_jump(b: Block) -> bool:
-        return len(b.ins) == 1 and b.term.opcode is Opcode.JMP
-
-    cf.trampolines = {}
+    result = {}
     for bl in cf.blocks_list:
-        if bl.term.opcode is not Opcode.JMP:
-            continue
-        s = cf.cfg.succ[bl][0]
-        jump = s
-        while is_jump(s):
-            s = cf.cfg.succ[s][0]
-            cf.trampolines[jump] = s
+        s = bl
+        chain = False
+        while True:
+            if len(s.ins) == 1 and s.term.opcode is Opcode.JMP:
+                s = cf.cfg.succ[s][0]
+                chain = True
+            else:
+                break
+        if chain:
+            result[bl] = s
+    cf.trampolines = result
 
 
 def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
