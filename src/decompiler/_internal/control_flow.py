@@ -329,7 +329,7 @@ def analyze(func: Function) -> ControlFlow:
     cf.idom = _compute_idom(cf.dom)
     cf.pdom = _find_dominators(cf.reverse_cfg, cf.blocks_list, cf.cfg.exit, True)
     cf.ipdom = _compute_idom(cf.pdom)
-    _resolve_jump_chains(cf)
+    cf.trampolines = _resolve_jump_chains(cf.blocks_list, cf.cfg)
     cf.loops = _find_loops(cf.cfg, cf.blocks_list, cf.dom)
     cf.headers = _Matcher(cf.loops).find_headers(cf)
     return cf
@@ -435,20 +435,20 @@ def _compute_idom(dom: Dominators) -> ImDominators:
     return idom
 
 
-def _resolve_jump_chains(cf: ControlFlow) -> None:
-    result = {}
-    for bl in cf.blocks_list:
+def _resolve_jump_chains(blocks: list[Block], cfg: CFG) -> dict[Block, Block]:
+    result: dict[Block, Block] = {}
+    for bl in blocks:
         s = bl
         chain = False
         while True:
             if len(s.ins) == 1 and s.term.opcode is Opcode.JMP:
-                s = cf.cfg.succ[s][0]
+                s = cfg.succ[s][0]
                 chain = True
             else:
                 break
         if chain:
             result[bl] = s
-    cf.trampolines = result
+    return result
 
 
 def _find_loops(cfg: CFG, blocks: list[Block], dom: Dominators) -> set[Block]:
