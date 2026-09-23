@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from decompiler.disassembler import Function, Instruction, Opcode
+from decompiler.disassembler import Function, Instruction, Opcode, Register
 from decompiler.syntax_tree import (
     StBreak,
     StDoWhile,
@@ -65,6 +65,9 @@ class Block:
 
     def __hash__(self) -> int:
         return id(self.ins)
+
+    def __len__(self) -> int:
+        return len(self.ins)
 
 
 @dataclass
@@ -159,6 +162,9 @@ class CFG:
     def followed(self, b: Block) -> Block:
         return self.succ[b][1]
 
+    def is_dead(self, b: Block) -> bool:
+        return b != self.entry and not self.pred[b]
+
     def reversed(self) -> CFG:
         result = CFG(self.exit, self.entry)
         blocks = set(self.pred) | set(self.succ)
@@ -170,6 +176,7 @@ class CFG:
 
 @dataclass(init=False)
 class ControlFlow:
+    func: Function
     leaders: set[Instruction]
     blocks: dict[Offset, Block]
     blocks_list: list[Block]
@@ -200,7 +207,7 @@ class _Matcher:
         self._matchers = (
             self._match_while,
             self._match_do_while,
-            self._match_switch,
+            self._try_match_switch,
             self._match_if_else,
             self._match_if,
         )
@@ -264,48 +271,68 @@ class _Matcher:
         cond = bl
         return DoWhileMatch(body, join, cond)
 
-    def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
-        # because of our iteration order, we'll get case bodies first.
-        # at least one of them (the last one) will end with a JMP to the join.
-        if bl.term.opcode is not Opcode.JMP:
-            return None
-        if not cf.cfg.pred[bl]:
-            return None  # we expect to match a case body, so it must have a pred.
-        join = cf.cfg.succ[bl][0]  # assume the next block is the join.
-
-        # assume the previous block belongs to the dispatch chain.
-        dispatch = cf.cfg.pred[bl][0]
-        default: Block | None = None
-        # it can either end with a JMP (if default)
-        # or with a CMPNE+JZ pair (if normal case).
-        if dispatch.term.opcode is Opcode.JMP:
-            # default case, always last in the chain.
-            default = dispatch
+    def _try_match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
+        result = self._match_switch(bl, cf)
+        if result is None:
             try:
-                dispatch = cf.cfg.pred[dispatch][0]
+                pred = cf.cfg.pred[bl][0]
+                pred = cf.cfg.pred[pred][0]
             except IndexError:
                 return None
-        elif dispatch.term.opcode is not Opcode.JZ:
+            return self._match_switch(pred, cf)
+
+    def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
+        # all switches start with two consecutive JMPs (dispatch + break trampoline).
+        # do-while also starts with two jumps, but at this point all do-whiles have
+        # alrady been matched.
+        if len(bl) < 2:
+            return None
+        i1 = bl.term
+        if i1.opcode is not Opcode.JMP:
+            return None
+        try:
+            i2 = cf.func.instr_list[i1.index + 1]
+            if i2.opcode is not Opcode.JMP:
+                return None
+
+            # also ensure there's a move into BX.
+            mov = cf.func.instr_list[i1.index - 1]
+            if mov.opcode is not Opcode.REGTOREG:
+                return None
+            if mov.get_reg(0) is not Register.AX:
+                return None
+            if mov.get_reg(1) is not Register.BX:
+                return None
+        except IndexError:
             return None
 
-        p = dispatch
-        while True:
-            p = cf.cfg.pred[p][0]
-            if not self._is_dispatch_block(p):
-                break
-            dispatch = p
-        cases: list[Block] = []
-        while self._is_dispatch_block(dispatch):  # walk forward to the last
-            cases.append(dispatch)  # collect cases in a list
-            self._matched.add(dispatch)
-            dispatch = cf.cfg.fallthrough(dispatch)
-        if not cases and default is None:
-            return None
+        # the second is the join of the switch.
+        join = cf.blocks[i2.get_label().to]
+        # the first jump is the beginning of the dispatch block.
+        dispatch = cf.blocks[i1.get_label().to]
+        if dispatch.term.opcode not in (Opcode.JZ, Opcode.JMP):
+            return SwitchMatch(bl, join, {}, None)  # empty switch
 
-        first = cases[0] if cases else default
-        assert first is not None
-        header = cf.cfg.pred[first][0]
-        return SwitchMatch(header, join, {cf.cfg.pred[c][0]: c for c in cases}, default)
+        # walk the dispatch chain and discover all the labels.
+        labels = []
+        b = dispatch
+        while self._is_dispatch_block(b):
+            labels.append(b)
+            b = cf.cfg.succ[b][0]
+
+        # check if we stopped at the jump to the default case.
+        default: Block | None = None
+        if b.term.opcode is Opcode.JMP:
+            default = cf.cfg.succ[b][0]
+
+        self._matched.add(dispatch)
+        if default is not None:
+            self._matched.add(default)
+        cases = {cf.cfg.succ[l][0]: l for l in labels}
+        for case, body in cases.items():
+            self._matched.add(case)
+            self._matched.add(body)
+        return SwitchMatch(bl, join, cases, default)
 
     def _is_dispatch_block(self, bl: Block) -> bool:
         return (
@@ -341,6 +368,7 @@ class _Matcher:
 
 def analyze(func: Function) -> ControlFlow:
     cf = ControlFlow()
+    cf.func = func
     cf.leaders = _find_leaders(func)
     cf.blocks = _make_blocks(func, cf.leaders)
     cf.blocks_list = list(cf.blocks.values())

@@ -431,7 +431,7 @@ class Disassembly:
                 label = Label(from_, to, func_name)
                 label.count += 1
                 labels.add(label)
-                inst = Instruction(opcode, [label], pc, idx, func_offset)
+                inst = Instruction(opcode, [label], pc, func_offset, idx)
                 return inst
             case _:
                 pass
@@ -457,7 +457,7 @@ class Disassembly:
                     else:
                         params.append(Fixup(arg, arg, FixupType.NO_FIXUP))
 
-        return Instruction(opcode, params, pc, idx, func_offset)
+        return Instruction(opcode, params, pc, func_offset, idx)
 
     def format(self, sw: StringWriter | None = None, fixups: bool = False) -> str:
         if sw is None:

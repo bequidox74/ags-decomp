@@ -86,13 +86,13 @@ class StSwitch(StStatement):
                 sw.println()
             sw.dedent()
 
-            if self.default is not None:
-                sw.println("default:")
-                sw.indent()
-                for s in self.default:
-                    s.emit(sw)
-                    sw.println()
-                sw.dedent()
+        if self.default is not None:
+            sw.println("default:")
+            sw.indent()
+            for s in self.default:
+                s.emit(sw)
+                sw.println()
+            sw.dedent()
         sw.print("}")
 
 
