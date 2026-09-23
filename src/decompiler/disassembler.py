@@ -188,6 +188,7 @@ class Instruction:
     params: list[Parameter]
     code_offset: Offset
     func_offset: Offset
+    index: int
 
     def get_reg(self, idx: int = 0) -> Register:
         reg = self.params[idx]
@@ -405,19 +406,21 @@ class Disassembly:
         instructions: dict[Offset, Instruction] = {}
         script_offset = self.code_to_script_offset(start)
 
+        idx = 0
         pc = start
         while pc < end:
             opcode = Opcode(self.code[pc])
-            instr = self._process_opcode(start, pc, opcode, mangled_name)
+            instr = self._process_opcode(start, pc, idx, opcode, mangled_name)
             instructions[pc] = instr
             pc += 1 + opcode.nargs
+            idx += 1
 
         return Function(
             mangled_name, name, nargs, start, script_offset, end - start, instructions
         )
 
     def _process_opcode(
-        self, start: Offset, pc: Offset, opcode: Opcode, func_name: str
+        self, start: Offset, pc: Offset, idx: int, opcode: Opcode, func_name: str
     ) -> Instruction:
         func_offset = pc - start
         match opcode:
@@ -428,7 +431,7 @@ class Disassembly:
                 label = Label(from_, to, func_name)
                 label.count += 1
                 labels.add(label)
-                inst = Instruction(opcode, [label], pc, func_offset)
+                inst = Instruction(opcode, [label], pc, idx, func_offset)
                 return inst
             case _:
                 pass
@@ -454,7 +457,7 @@ class Disassembly:
                     else:
                         params.append(Fixup(arg, arg, FixupType.NO_FIXUP))
 
-        return Instruction(opcode, params, pc, func_offset)
+        return Instruction(opcode, params, pc, idx, func_offset)
 
     def format(self, sw: StringWriter | None = None, fixups: bool = False) -> str:
         if sw is None:

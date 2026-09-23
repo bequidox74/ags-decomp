@@ -210,6 +210,8 @@ class _Matcher:
         # process innermost blocks first.
         sorted_ = sorted(cf.blocks_list, key=lambda b: len(cf.dom[b]), reverse=True)
         for bl in sorted_:
+            if bl != cf.cfg.entry and not cf.cfg.pred[bl]:
+                continue
             if bl in self._matched:
                 continue
             if not self._is_potential_header(bl):
@@ -263,47 +265,53 @@ class _Matcher:
         return DoWhileMatch(body, join, cond)
 
     def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
+        # because of our iteration order, we'll get case bodies first.
+        # at least one of them (the last one) will end with a JMP to the join.
+        if bl.term.opcode is not Opcode.JMP:
+            return None
         if not cf.cfg.pred[bl]:
-            return None  # skip dead code
-        if bl.term.opcode is Opcode.JMP:
-            # if it ends with a jump, check that the previous block
-            # is a single jump (i.e. the dispatch).
-            pred = cf.cfg.pred[bl][0]
-            if len(pred.ins) != 1 and pred.term.opcode is not Opcode.JMP:
-                return None
+            return None  # we expect to match a case body, so it must have a pred.
+        join = cf.cfg.succ[bl][0]  # assume the next block is the join.
 
+        # assume the previous block belongs to the dispatch chain.
+        dispatch = cf.cfg.pred[bl][0]
         default: Block | None = None
-        if bl.term.opcode is Opcode.JMP and bl not in cf.trampolines:
-            default = cf.cfg.succ[bl][0]
+        # it can either end with a JMP (if default)
+        # or with a CMPNE+JZ pair (if normal case).
+        if dispatch.term.opcode is Opcode.JMP:
+            # default case, always last in the chain.
+            default = dispatch
+            try:
+                dispatch = cf.cfg.pred[dispatch][0]
+            except IndexError:
+                return None
+        elif dispatch.term.opcode is not Opcode.JZ:
+            return None
 
-        # case conditions are nested inside one another in the dominator tree,
-        # so given our order of iteration (innermost-first), we should assume
-        # the current block is the last in the chain.
+        p = dispatch
+        while True:
+            p = cf.cfg.pred[p][0]
+            if not self._is_dispatch_block(p):
+                break
+            dispatch = p
         cases: list[Block] = []
-        bodies: list[Block] = []
-        s = bl
-        while s is not None:
-            if len(s.ins) < 2:
-                break
-            cmp = s.ins[-2]
-            if cmp.opcode not in _SWITCH_CMP:
-                break
-            cases.append(s)
-            bodies.append(cf.cfg.followed(s))
-            self._matched.add(s)
-            s = cf.cfg.pred[s][0]
-        cases = cases[::-1]
-        bodies = bodies[::-1]
-
-        join = cf.ipdom[bl]
+        while self._is_dispatch_block(dispatch):  # walk forward to the last
+            cases.append(dispatch)  # collect cases in a list
+            self._matched.add(dispatch)
+            dispatch = cf.cfg.fallthrough(dispatch)
         if not cases and default is None:
             return None
 
-        # a switch can either end in a JZ block (normal case), or a JMP block (default).
-        header = cases[0] if cases else default
-        assert header is not None
-        return SwitchMatch(
-            header, join, {c[0]: c[1] for c in zip(cases, bodies)}, default
+        first = cases[0] if cases else default
+        assert first is not None
+        header = cf.cfg.pred[first][0]
+        return SwitchMatch(header, join, {cf.cfg.pred[c][0]: c for c in cases}, default)
+
+    def _is_dispatch_block(self, bl: Block) -> bool:
+        return (
+            len(bl.ins) >= 2
+            and bl.ins[-2].opcode in _SWITCH_CMP
+            and bl.term.opcode is Opcode.JZ
         )
 
     def _match_if_else(
