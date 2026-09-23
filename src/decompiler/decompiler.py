@@ -17,11 +17,11 @@ def decompile(disassembly: Disassembly) -> StScript:
 
 
 def decompile_func(func: Function) -> StFunction | None:
-    logger.info("decompiling %s", func.mangled_name)
+    logger.info("decompiling %s", func.fullname)
     try:
         cf = control_flow.analyze(func)
         return structurer.structure(func, cf)
     except Exception:  # pylint: disable=broad-exception-caught
         # logger.error("error while decompiling %s", func.mangled_name)
-        logger.exception("error while decompiling %s", func.mangled_name)
-        return StFunction(f"INVALID_{func.mangled_name}", [])
+        logger.exception("error while decompiling %s", func.fullname)
+        return StFunction(f"INVALID_{func.fullname}", [])

@@ -343,7 +343,7 @@ def _find_leaders(func: Function) -> set[Instruction]:
         is_ret = ins.opcode is Opcode.RET
         if is_jump:
             l = ins.get_label()
-            leaders.add(func.instructions[l.to])
+            leaders.add(func.instrs[l.to])
         if (is_jump or is_ret) and idx + 1 < len(func.instr_list):  # fallthrough
             leaders.add(func.instr_list[idx + 1])
     return leaders

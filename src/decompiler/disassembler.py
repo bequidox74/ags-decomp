@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import NamedTuple, Self
 from warnings import warn
@@ -13,6 +13,8 @@ from utils import format_bindata, quote, verify
 
 type Parameter = Fixup | Label | Register
 type Offset = int
+type CodeOffset = Offset
+type ScriptOffset = Offset
 
 
 # see https://github.com/adventuregamestudio/ags/blob/master/Engine/script/cc_instance.cpp
@@ -126,7 +128,7 @@ class ExportType(IntEnum):
 
 class Export(NamedTuple):
     name: str
-    address: Offset
+    address: CodeOffset
     type: ExportType
 
 
@@ -216,9 +218,6 @@ class Instruction:
     def __post_init__(self) -> None:
         assert len(self.params) <= 3
 
-    def __hash__(self) -> int:
-        return hash(self.code_offset)
-
     def __str__(self) -> str:
         mnemonic = self.opcode.mnemonic
         fmt_params = ", ".join(map(str, self.params))
@@ -230,24 +229,26 @@ class Instruction:
     def __repr__(self) -> str:
         return f"<Instruction '{self}'>"
 
+    def __hash__(self) -> int:
+        return id(self)
+
 
 @dataclass
 class Function:
-    mangled_name: str
+    fullname: str
     name: str
     nargs: int
-    code_offset: int
-    script_offset: int
+    instrs: dict[CodeOffset, Instruction]
+    code_off: CodeOffset
+    scr_off: Offset
     size: int
 
-    instructions: dict[Offset, Instruction]
-    """Dict of `code offset` -> `Instruction`"""
-
-    instr_list: list[Instruction] = field(init=False)
-
     def __post_init__(self) -> None:
-        self.instr_list = list(self.instructions.values())
+        self.instr_list = list(self.instrs.values())
         self.instr_list.sort(key=lambda i: i.func_offset)
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 class Disassembly:
@@ -275,23 +276,25 @@ class Disassembly:
         self.exports: dict[Offset, Export] = {}
         self.sections: dict[Offset, str] = {}
 
-        self.functions: dict[Offset, Function] = {}
-        """Dict of `code offset` -> `Function`"""
-        self.jumps: defaultdict[Offset, set[Label]] = defaultdict(set)
-        self._func_ranges: list[range]
+        self.functions: dict[CodeOffset, Function] = {}
+        self.func_offsets: dict[Function, CodeOffset] = {}
+        self.jumps: defaultdict[CodeOffset, set[Label]] = defaultdict(set)
+        self.func_ranges: list[range] = []
 
         with BinaryReader(source) as br:
             self._read_scom(br)
         self._disassemble()
 
-    def script_to_code_offset(self, script: Offset) -> Offset:
+    def scr_to_code(self, script: Offset) -> CodeOffset:
         return (script - self.code_offset) // 4
 
-    def code_to_script_offset(self, code: Offset) -> Offset:
+    def code_to_scr(self, code: CodeOffset) -> Offset:
         return self.code_offset + code * 4
 
-    def code_offset_to_func(self, code: Offset) -> Function | None:
-        range_ = next((r for r in self._func_ranges if code in r), None)
+    def code_to_func(self, code: CodeOffset) -> Function | None:
+        if code in self.functions:
+            return self.functions[code]
+        range_ = next((r for r in self.func_ranges if code in r), None)
         if range_ is None:
             return None
         return self.functions[range_.start]
@@ -359,11 +362,11 @@ class Disassembly:
         self.exports_offset = br.tell()
         num_exports = br.u32()
         for _ in range(num_exports):
-            export = br.cstr()
+            symbol = br.cstr()
             raw = br.u32()
             address = raw & 0x00FFFFFF
             type_ = (raw >> 24) & 0xFF
-            self.exports[br.tell()] = Export(export, address, ExportType(type_))  # pylint: disable=no-value-for-parameter
+            self.exports[br.tell()] = Export(symbol, address, ExportType(type_))  # pylint: disable=no-value-for-parameter
 
         self.sections_offset = br.tell()
         num_sections = br.u32()
@@ -378,8 +381,8 @@ class Disassembly:
     def _disassemble(self) -> None:
         # exports can contain *both* functions and variables.
         # read exports table to find out where the functions begin and end.
-        entries: list[Offset] = []
-        self._func_names: dict[Offset, str] = {}
+        entries: list[CodeOffset] = []
+        self._func_names: dict[CodeOffset, str] = {}
         for e in self.exports.values():
             if e.type is not ExportType.FUNCTION:
                 continue
@@ -389,22 +392,23 @@ class Disassembly:
         # build ranges (start, end) in ascending order.
         entries.sort()
         entries.append(len(self.code))
-        self._func_ranges: list[range] = [
+        self.func_ranges: list[range] = [
             range(entries[i], entries[i + 1]) for i in range(len(entries) - 1)
         ]
 
-        for r in self._func_ranges:
+        for r in self.func_ranges:
             start = r.start
             end = r.stop
             func = self._dis_function(start, end, self._func_names[start])
             self.functions[start] = func
+            self.func_offsets[func] = start
 
     def _dis_function(self, start: int, end: int, mangled_name: str) -> Function:
         parts = mangled_name.split("$")
         name = parts[0]
         nargs = int(parts[1])
         instructions: dict[Offset, Instruction] = {}
-        script_offset = self.code_to_script_offset(start)
+        script_offset = self.code_to_scr(start)
 
         idx = 0
         pc = start
@@ -416,7 +420,7 @@ class Disassembly:
             idx += 1
 
         return Function(
-            mangled_name, name, nargs, start, script_offset, end - start, instructions
+            mangled_name, name, nargs, instructions, start, script_offset, end - start
         )
 
     def _process_opcode(
@@ -481,15 +485,14 @@ class Disassembly:
             sw.cr()
             sw.println(f".code[{self.num_codes}]")
             for func in self.functions.values():
-                sw.print(func.mangled_name)
+                sw.print(func.fullname)
                 sw.print(": ; ")
-                sw.print(f"code offset=0x{func.code_offset:X}, ")
-                sw.print(f"script offset=0x{func.script_offset:X}")
+                sw.print(f"code offset=0x{func.code_off:X}, ")
+                sw.print(f"script offset=0x{func.scr_off:X}")
                 sw.println()
 
-                sw.indent()
-                sw.indent()
-                for item in func.instructions.values():
+                sw.indent(2)
+                for item in func.instrs.values():
                     if offset in self.jumps:
                         num_labels = len(self.jumps[offset])
                         references: str
@@ -513,8 +516,7 @@ class Disassembly:
                     if is_linenum:
                         sw.indent()
                     offset += 1 + len(item.params)
-                sw.dedent()
-                sw.dedent()
+                sw.dedent(2)
                 sw.println()
 
         if self.strings:
