@@ -1,6 +1,6 @@
 import logging
 
-from decompiler._internal import control_flow, recovery
+from decompiler._internal import control_flow, structurer
 from decompiler.disassembler import Disassembly, Function
 from decompiler.syntax_tree import StFunction, StScript
 
@@ -20,7 +20,7 @@ def decompile_func(func: Function) -> StFunction | None:
     logger.info("decompiling %s", func.mangled_name)
     try:
         cf = control_flow.analyze(func)
-        return recovery.recover(func, cf)
+        return structurer.recover(func, cf)
     except Exception:  # pylint: disable=broad-exception-caught
         # logger.error("error while decompiling %s", func.mangled_name)
         logger.exception("error while decompiling %s", func.mangled_name)

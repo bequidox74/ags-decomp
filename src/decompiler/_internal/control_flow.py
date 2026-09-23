@@ -14,7 +14,7 @@ from decompiler.syntax_tree import (
 )
 
 if TYPE_CHECKING:
-    from decompiler._internal.recovery import Structurer
+    from decompiler._internal.structurer import Structurer
 
 logger = logging.getLogger(__name__)
 
