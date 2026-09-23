@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from decompiler.disassembler import Function, Instruction, Opcode
 from decompiler.syntax_tree import (
+    StBreak,
     StDoWhile,
     StIfElse,
     StStatement,
@@ -109,7 +110,11 @@ class SwitchMatch(Match):
         default = None
         if self.default is not None:
             default = structurer.build_region(self.default, self.join)
-        # cases[-1].append(StBreak())
+
+        if default is not None:
+            default.append(StBreak())
+        elif cases:
+            cases[-1].append(StBreak())
         return StSwitch(cases, default)
 
 
