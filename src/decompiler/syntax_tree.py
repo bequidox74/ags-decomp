@@ -62,7 +62,7 @@ class StDoWhile(StStatement):
     def emit(self, sw: StringWriter) -> None:
         sw.print("do ")
         emit_block(sw, self.body)
-        sw.print(" while (0)")
+        sw.print(" while (0);")
 
 
 @dataclass

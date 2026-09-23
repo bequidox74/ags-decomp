@@ -185,6 +185,7 @@ class ControlFlow:
 
     loops: set[Block]
     headers: dict[Block, Match]
+    do_while: dict[Block, DoWhileMatch]
     trampolines: dict[Block, Block]
 
     def blocks_between(self, start: Block, stop: Block) -> list[Block]:
@@ -208,12 +209,11 @@ class _Matcher:
         )
 
     def find_headers(self, cf: ControlFlow) -> dict[Block, Match]:
+        cf.do_while = {}
         matches: dict[Block, Match] = {}
         # process innermost blocks first.
         sorted_ = sorted(cf.blocks_list, key=lambda b: len(cf.dom[b]), reverse=True)
         for bl in sorted_:
-            if bl != cf.cfg.entry and not cf.cfg.pred[bl]:
-                continue
             if bl in self._matched:
                 continue
             if not self._is_potential_header(bl):
@@ -223,8 +223,6 @@ class _Matcher:
                 if result is not None:
                     matches[result.header] = result
                     break
-        for l in self.loops:
-            assert isinstance(matches[l], WhileMatch | DoWhileMatch)
         return matches
 
     def _is_potential_header(self, bl: Block) -> bool:
@@ -255,16 +253,15 @@ class _Matcher:
 
         return WhileMatch(bl, join, body, jump)
 
-    def _match_do_while(self, bl: Block, cf: ControlFlow) -> DoWhileMatch | None:
+    def _match_do_while(self, bl: Block, cf: ControlFlow) -> None:
         if bl.term.opcode is not Opcode.JNZ:
-            return None
+            return
         body = cf.cfg.followed(bl)
-        if body not in self.loops:
-            return None
         join = cf.ipdom[bl]
         assert cf.cfg.fallthrough(bl) is join
         cond = bl
-        return DoWhileMatch(body, join, cond)
+        self._matched.add(bl)
+        cf.do_while[body] = DoWhileMatch(body, join, cond)
 
     def _try_match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
         result = self._match_switch(bl, cf)
