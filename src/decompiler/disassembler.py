@@ -430,37 +430,31 @@ class Disassembly:
     def _process_opcode(
         self, pc: Offset, idx: int, opcode: Opcode, func_name: str
     ) -> Instruction:
-        match opcode:
-            case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
-                from_ = pc
-                to = pc + 2 + self.code[pc + 1]  # + 2 to skip our args
-                labels = self.jumps[to]
-                label = Label(from_, to, func_name)
-                label.count += 1
-                labels.add(label)
-                inst = Instruction(opcode, [label], pc, idx)
-                return inst
-            case _:
-                pass
-
         params: list[Parameter] = []
-        for i, f in enumerate(opcode.args_format):
-            arg_idx = pc + i + 1
-            arg = self.code[arg_idx]
-            match f:
-                case "r":  # register
+        if opcode in (Opcode.JMP, Opcode.JZ, Opcode.JNZ):
+            from_ = pc
+            to = pc + 2 + self.code[pc + 1]  # + 2 to skip our args
+            labels = self.jumps[to]
+            label = Label(from_, to, func_name)
+            label.count += 1
+            labels.add(label)
+            params = [label]
+        else:
+            for i, f in enumerate(opcode.args_format):
+                arg_idx = pc + i + 1
+                arg = self.code[arg_idx]
+                if f == "r":  # register
                     params.append(Register(arg))
-                case "a":  # argument, possible fixup
+                elif f == "a":  # argument, possible fixup
                     # is there a fixup for this index?
                     if arg_idx in self.fixups:
                         type_ = self.fixups[arg_idx]
-                        match self.fixups[arg_idx]:
-                            case FixupType.STRING:
-                                params.append(Fixup(arg, self.strings[arg], type_))
-                            case FixupType.IMPORT:
-                                params.append(Fixup(arg, self.imports[arg], type_))
-                            case _:
-                                params.append(Fixup(arg, arg, type_))
+                        if type_ is FixupType.STRING:
+                            params.append(Fixup(arg, self.strings[arg], type_))
+                        if type_ is FixupType.IMPORT:
+                            params.append(Fixup(arg, self.imports[arg], type_))
+                        else:
+                            params.append(Fixup(arg, arg, type_))
                     else:
                         params.append(Fixup(arg, arg, FixupType.NO_FIXUP))
 
