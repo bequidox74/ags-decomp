@@ -3,7 +3,7 @@ from abc import ABC
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from decompiler.disassembler import Function, Instruction, Opcode, Register
+from decompiler.disassembler import Function, Instruction, Opcode
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class CFG:
         return result
 
 
-@dataclass(init=False)
+@dataclass(init=False, repr=False)
 class ControlFlow:
     func: Function
     leaders: set[Instruction]
@@ -202,12 +202,6 @@ class _Matcher:
 
         join = cf.ipdom[bl]
         body = cf.cfg.fallthrough(jump)
-
-        if body.term.opcode is not Opcode.JMP:
-            return None
-        if body.term.get_label().to != bl.ins[0].code_off:
-            return None
-
         return WhileMatch(bl, join, body, jump)
 
     def _match_do_while(self, bl: Block, cf: ControlFlow) -> None:
@@ -235,6 +229,8 @@ class _Matcher:
         # all switches start with two consecutive JMPs (dispatch + break trampoline).
         # do-while also starts with two jumps, but at this point all do-whiles have
         # alrady been matched.
+        if bl in cf.do_while:
+            return None
         if len(bl) < 2:
             return None
         i1 = bl.term
@@ -243,15 +239,6 @@ class _Matcher:
         try:
             i2 = cf.func.instrs[i1.index + 1]
             if i2.opcode is not Opcode.JMP:
-                return None
-
-            # also ensure there's a move into BX.
-            mov = cf.func.instrs[i1.index - 1]
-            if mov.opcode is not Opcode.REGTOREG:
-                return None
-            if mov.get_reg(0) is not Register.AX:
-                return None
-            if mov.get_reg(1) is not Register.BX:
                 return None
         except IndexError:
             return None
@@ -295,7 +282,7 @@ class _Matcher:
     def _match_if_else(
         self, bl: Block, cf: ControlFlow
     ) -> IfElseMatch | IfMatch | None:
-        if bl.term.opcode is not Opcode.JZ:
+        if bl.term.opcode not in _COND_JUMPS:
             return None
         then = cf.cfg.fallthrough(bl)
         else_ = cf.cfg.followed(bl)
@@ -303,11 +290,13 @@ class _Matcher:
         if then == join or else_ == join:
             return None
         if join == cf.cfg.exit:
+            # special case the top-level if in a function. it's
+            # functionally equivalent, but reads better as an early return.
             return IfMatch(bl, join, then)
         return IfElseMatch(bl, join, then, else_)
 
     def _match_if(self, bl: Block, cf: ControlFlow) -> IfMatch | None:
-        if bl.term.opcode is not Opcode.JZ:
+        if bl.term.opcode not in _COND_JUMPS:
             return None
         body = cf.cfg.fallthrough(bl)
         skip = cf.cfg.followed(bl)
@@ -387,7 +376,7 @@ def _build_cfg(blocks: dict[Offset, Block]) -> CFG:
             cfg.link(bl, exit_)
         else:  # fallthrough
             # we don't check for OOB since the last block
-            # is guaranteed to be terminate with a return.
+            # is guaranteed to be terminated with a return.
             cfg.link(bl, blocks[offsets[i + 1]])
 
     return cfg
