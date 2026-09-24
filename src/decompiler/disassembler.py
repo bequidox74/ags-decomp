@@ -175,7 +175,7 @@ class Fixup:
                 return str(self.original)
 
 
-@dataclass(unsafe_hash=True)
+@dataclass(eq=False)
 class Label:
     from_: int
     to: int
@@ -186,7 +186,7 @@ class Label:
         return f"L{self.to}_{self.func_name}"
 
 
-@dataclass
+@dataclass(eq=False)
 class Instruction:
     opcode: Opcode
     params: list[Parameter]
@@ -231,11 +231,8 @@ class Instruction:
     def __repr__(self) -> str:
         return f"<Instruction '{self}'>"
 
-    def __hash__(self) -> int:
-        return id(self)
 
-
-@dataclass
+@dataclass(eq=False)
 class Function:
     dis: Disassembly
     fullname: str
@@ -249,9 +246,6 @@ class Function:
     def __post_init__(self) -> None:
         self.instr_list = list(self.instrs.values())
         self.instr_list.sort(key=lambda i: i.func_offset)
-
-    def __hash__(self) -> int:
-        return id(self)
 
 
 class Disassembly:
