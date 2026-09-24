@@ -17,7 +17,7 @@ def sjoin(joiner: str, *args):
 
 
 def quote(s: str) -> str:
-    return f'"{s}"'
+    return f'"{s.replace('"', '\\"')}"'
 
 
 def format_bindata(b: bytes) -> list[str]:

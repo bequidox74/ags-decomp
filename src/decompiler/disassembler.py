@@ -163,6 +163,10 @@ class Fixup:
     fixed: int | str
     type: FixupType
 
+    @property
+    def is_fixed(self) -> bool:
+        return self.type is not FixupType.NO_FIXUP
+
     def __str__(self) -> str:
         match self.type:
             case FixupType.STRING:
