@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import NamedTuple, Self
 from warnings import warn
@@ -188,6 +188,7 @@ class Label:
 
 @dataclass(eq=False)
 class Instruction:
+    func: Function = field(init=False)
     opcode: Opcode
     params: list[Parameter]
     code_off: CodeOffset
@@ -412,7 +413,7 @@ class Disassembly:
             pc += 1 + opcode.nargs
             idx += 1
 
-        return Function(
+        func = Function(
             self,
             mangled_name,
             name,
@@ -422,6 +423,9 @@ class Disassembly:
             script_offset,
             end - start,
         )
+        for i in instructions.values():
+            i.func = func
+        return func
 
     def _process_opcode(
         self, pc: Offset, idx: int, opcode: Opcode, func_name: str
