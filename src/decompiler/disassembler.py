@@ -237,6 +237,7 @@ class Instruction:
 
 @dataclass
 class Function:
+    dis: Disassembly
     fullname: str
     name: str
     nargs: int
@@ -279,7 +280,6 @@ class Disassembly:
         self.sections: dict[Offset, str] = {}
 
         self.functions: dict[CodeOffset, Function] = {}
-        self.func_offsets: dict[Function, CodeOffset] = {}
         self.jumps: defaultdict[CodeOffset, set[Label]] = defaultdict(set)
         self.func_ranges: list[range] = []
 
@@ -403,7 +403,6 @@ class Disassembly:
             end = r.stop
             func = self._dis_function(start, end, self._func_names[start])
             self.functions[start] = func
-            self.func_offsets[func] = start
 
     def _dis_function(self, start: int, end: int, mangled_name: str) -> Function:
         parts = mangled_name.split("$")
@@ -422,7 +421,14 @@ class Disassembly:
             idx += 1
 
         return Function(
-            mangled_name, name, nargs, instructions, start, script_offset, end - start
+            self,
+            mangled_name,
+            name,
+            nargs,
+            instructions,
+            start,
+            script_offset,
+            end - start,
         )
 
     def _process_opcode(
