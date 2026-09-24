@@ -40,13 +40,10 @@ class _Structurer:
             if bl in self._visited:
                 break
             self._visited.add(bl)
-            if bl in self.cf.do_while:
-                stmts.append(self.build_construct(self.cf.do_while[bl]))
-                bl = self._next_block(bl)
-                continue
             if bl in self.cf.headers:
-                stmts.append(self.build_construct(self.cf.headers[bl]))
-                bl = self._next_block(bl)
+                header = self.cf.headers[bl]
+                stmts.append(self.build_construct(header))
+                bl = header.join
                 continue
             bl = self._next_block(bl)
         return stmts
