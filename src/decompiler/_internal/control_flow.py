@@ -205,7 +205,7 @@ class _Matcher:
 
         if body.term.opcode is not Opcode.JMP:
             return None
-        if body.term.get_label().to != bl.ins[0].code_offset:
+        if body.term.get_label().to != bl.ins[0].code_off:
             return None
 
         return WhileMatch(bl, join, body, jump)
@@ -241,12 +241,12 @@ class _Matcher:
         if i1.opcode is not Opcode.JMP:
             return None
         try:
-            i2 = cf.func.instr_list[i1.index + 1]
+            i2 = cf.func.instrs[i1.index + 1]
             if i2.opcode is not Opcode.JMP:
                 return None
 
             # also ensure there's a move into BX.
-            mov = cf.func.instr_list[i1.index - 1]
+            mov = cf.func.instrs[i1.index - 1]
             if mov.opcode is not Opcode.REGTOREG:
                 return None
             if mov.get_reg(0) is not Register.AX:
@@ -337,15 +337,15 @@ def analyze(func: Function) -> ControlFlow:
 
 def _find_leaders(func: Function) -> set[Instruction]:
     leaders: set[Instruction] = set()
-    leaders.add(func.instr_list[0])
-    for idx, ins in enumerate(func.instr_list):
+    leaders.add(func.instrs[0])
+    for idx, ins in enumerate(func.instrs):
         is_jump = ins.opcode in _JUMPS
         is_ret = ins.opcode is Opcode.RET
         if is_jump:
             l = ins.get_label()
-            leaders.add(func.instrs[l.to])
-        if (is_jump or is_ret) and idx + 1 < len(func.instr_list):  # fallthrough
-            leaders.add(func.instr_list[idx + 1])
+            leaders.add(func.off_to_instr[l.to])
+        if (is_jump or is_ret) and idx + 1 < len(func.instrs):  # fallthrough
+            leaders.add(func.instrs[idx + 1])
     return leaders
 
 
@@ -355,10 +355,10 @@ def _make_blocks(func: Function, leaders: set[Instruction]) -> dict[Offset, Bloc
 
     def flush() -> None:
         nonlocal current
-        blocks[current[0].code_offset] = Block(current)
+        blocks[current[0].code_off] = Block(current)
         current = []
 
-    for ins in func.instr_list:
+    for ins in func.instrs:
         if ins in leaders and current:
             flush()
         current.append(ins)

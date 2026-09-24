@@ -190,8 +190,7 @@ class Label:
 class Instruction:
     opcode: Opcode
     params: list[Parameter]
-    code_offset: Offset
-    func_offset: Offset
+    code_off: CodeOffset
     index: int
 
     def get_reg(self, idx: int = 0) -> Register:
@@ -238,14 +237,13 @@ class Function:
     fullname: str
     name: str
     nargs: int
-    instrs: dict[CodeOffset, Instruction]
+    off_to_instr: dict[CodeOffset, Instruction]
     code_off: CodeOffset
     scr_off: Offset
     size: int
 
     def __post_init__(self) -> None:
-        self.instr_list = list(self.instrs.values())
-        self.instr_list.sort(key=lambda i: i.func_offset)
+        self.instrs = list(self.off_to_instr.values())
 
 
 class Disassembly:
@@ -409,7 +407,7 @@ class Disassembly:
         pc = start
         while pc < end:
             opcode = Opcode(self.code[pc])
-            instr = self._process_opcode(start, pc, idx, opcode, mangled_name)
+            instr = self._process_opcode(pc, idx, opcode, mangled_name)
             instructions[pc] = instr
             pc += 1 + opcode.nargs
             idx += 1
@@ -426,9 +424,8 @@ class Disassembly:
         )
 
     def _process_opcode(
-        self, start: Offset, pc: Offset, idx: int, opcode: Opcode, func_name: str
+        self, pc: Offset, idx: int, opcode: Opcode, func_name: str
     ) -> Instruction:
-        func_offset = pc - start
         match opcode:
             case Opcode.JMP | Opcode.JZ | Opcode.JNZ:
                 from_ = pc
@@ -437,7 +434,7 @@ class Disassembly:
                 label = Label(from_, to, func_name)
                 label.count += 1
                 labels.add(label)
-                inst = Instruction(opcode, [label], pc, func_offset, idx)
+                inst = Instruction(opcode, [label], pc, idx)
                 return inst
             case _:
                 pass
@@ -463,7 +460,7 @@ class Disassembly:
                     else:
                         params.append(Fixup(arg, arg, FixupType.NO_FIXUP))
 
-        return Instruction(opcode, params, pc, func_offset, idx)
+        return Instruction(opcode, params, pc, idx)
 
     def format(self, sw: StringWriter | None = None, fixups: bool = False) -> str:
         if sw is None:
@@ -494,7 +491,7 @@ class Disassembly:
                 sw.println()
 
                 sw.indent(2)
-                for item in func.instrs.values():
+                for item in func.off_to_instr.values():
                     if offset in self.jumps:
                         num_labels = len(self.jumps[offset])
                         references: str
