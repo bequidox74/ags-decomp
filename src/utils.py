@@ -6,7 +6,7 @@ T = TypeVar("T")
 
 def verify(cond: bool, *args) -> None:
     if not cond:
-        raise RuntimeError(*args)
+        raise AssertionError(*args)
 
 
 def sjoin(joiner: str, *args):
