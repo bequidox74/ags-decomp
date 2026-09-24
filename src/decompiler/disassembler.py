@@ -95,14 +95,16 @@ class Opcode(enum.Enum):
     NEWARRAY = (72, "newarray", "raa")
     NEWUSEROBJECT = (73, "newuserobject", "ra")
 
-    def __init__(self, _, mnemonic: str, argfmt: str) -> None:
-        self.mnemonic = mnemonic
-        self.args_format = argfmt
-        self.nargs = len(argfmt)
+    mnemonic: str
+    args_format: str
+    nargs: int
 
-    def __new__(cls, value: int, *_):
+    def __new__(cls, opcode: int, mnemonic: str, argfmt: str) -> Self:
         obj = object.__new__(cls)
-        obj._value_ = value
+        obj._value_ = opcode
+        obj.mnemonic = mnemonic
+        obj.args_format = argfmt
+        obj.nargs = len(argfmt)
         return obj
 
 
@@ -366,7 +368,7 @@ class Disassembly:
             raw = br.u32()
             address = raw & 0x00FFFFFF
             type_ = (raw >> 24) & 0xFF
-            self.exports[br.tell()] = Export(symbol, address, ExportType(type_))  # pylint: disable=no-value-for-parameter
+            self.exports[br.tell()] = Export(symbol, address, ExportType(type_))
 
         self.sections_offset = br.tell()
         num_sections = br.u32()
