@@ -24,7 +24,7 @@ types:
         repeat-expr: num_frames
     instances:
       run_next_loop:
-        value: run_next_loop_raw == 1
+        value: run_next_loop_raw != 0
   frame:
     seq:
       - id: image
@@ -33,13 +33,18 @@ types:
         type: s2
       - id: y_offset
         type: s2
+      - id: delay
+        type: u2
       - id: alignment
         size: 2
       - id: flipped_raw
         type: u4
       - id: audio_array_id
         type: u4
-      - id: reserved
+      - id: reserved1
         type: u4
-        repeat: expr
-        repeat-expr: 2
+      - id: reserved2
+        type: u4
+    instances:
+      flipped:
+        value: flipped_raw != 0

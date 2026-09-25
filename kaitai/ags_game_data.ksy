@@ -8,6 +8,7 @@ meta:
     - ags_compiled_script
     - ags_view
     - ags_character
+    - ags_dialog
   encoding: UTF-8
   endian: le
   bit-endian: be
@@ -57,7 +58,7 @@ seq:
   - id: char_interact_scripts
     type: interaction_scripts
     repeat: expr
-    repeat-expr: game_setup.num_characters
+    repeat-expr: game_setup.num_chars
   - id: inv_item_interact_scripts
     type: interaction_scripts
     repeat: expr
@@ -85,7 +86,20 @@ seq:
   - id: characters
     type: ags_character
     repeat: expr
-    repeat-expr: game_setup.num_characters
+    repeat-expr: game_setup.num_chars
+  - id: lipsync
+    type: str
+    repeat: expr
+    repeat-expr: 20
+    size: 50
+  - id: global_messages
+    type: encrypted_str
+    repeat: until
+    repeat-until: _.size == 0
+  - id: dialogs
+    type: ags_dialog
+    repeat: expr
+    repeat-expr: game_setup.num_dialogs
 
 types:
   game_setup:
@@ -110,17 +124,17 @@ types:
         repeat-expr: 256
       - id: num_views
         type: s4
-      - id: num_characters
+      - id: num_chars
         type: s4
-      - id: player_character_id
+      - id: player_char_id
         type: s4
-      - id: maximum_score
+      - id: max_score
         type: s4
       - id: inv_items_count_raw
         type: s2
       - id: item_count_padding
         size: 2
-      - id: dialog_count
+      - id: num_dialogs
         type: s4
       - id: numdlgmessage
         type: s4
@@ -309,13 +323,18 @@ types:
         repeat: expr
         repeat-expr: num_scripts
 
-  parser_word:
+  encrypted_str:
     seq:
       - id: size
-        type: s4
-      - id: encrypted # enc[i] = src[i] + "Avis Durgan"[i % len(key)]
+        type: u4
+      - id: content # enc[i] = src[i] + "Avis Durgan"[i % len(key)]
         type: str
         size: size
+
+  parser_word:
+    seq:
+      - id: word
+        type: encrypted_str
       - id: word_group
         type: s2
 
