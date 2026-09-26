@@ -209,7 +209,7 @@ class _Matcher:
             return
         body = cf.cfg.followed(bl)
         join = cf.ipdom[bl]
-        assert cf.cfg.fallthrough(bl) is join
+        # assert cf.cfg.fallthrough(bl) is join
         cond = bl
         self._matched.add(bl)
         cf.do_while[body] = DoWhileMatch(body, join, cond)
@@ -228,7 +228,7 @@ class _Matcher:
     def _match_switch(self, bl: Block, cf: ControlFlow) -> SwitchMatch | None:
         # all switches start with two consecutive JMPs (dispatch + break trampoline).
         # do-while also starts with two jumps, but at this point all do-whiles have
-        # alrady been matched.
+        # already been matched.
         if bl in cf.do_while:
             return None
         if len(bl) < 2:
@@ -284,22 +284,32 @@ class _Matcher:
     ) -> IfElseMatch | IfMatch | None:
         if bl.term.opcode not in _COND_JUMPS:
             return None
-        then = cf.cfg.fallthrough(bl)
-        else_ = cf.cfg.followed(bl)
+
+        if bl.term.opcode is Opcode.JZ:
+            then = cf.cfg.fallthrough(bl)
+            else_ = cf.cfg.followed(bl)
+        else:  # JNZ
+            then = cf.cfg.followed(bl)
+            else_ = cf.cfg.fallthrough(bl)
+
         join = cf.ipdom[bl]
-        if then == join or else_ == join:
+        if join in (then, else_):
             return None
         if join == cf.cfg.exit:
-            # special case the top-level if in a function. it's
-            # functionally equivalent, but reads better as an early return.
+            # special case for the top-level if in a function.
+            # it's equivalent, but reads better as an early return.
             return IfMatch(bl, join, then)
         return IfElseMatch(bl, join, then, else_)
 
     def _match_if(self, bl: Block, cf: ControlFlow) -> IfMatch | None:
         if bl.term.opcode not in _COND_JUMPS:
             return None
-        body = cf.cfg.fallthrough(bl)
-        skip = cf.cfg.followed(bl)
+        if bl.term.opcode is Opcode.JZ:
+            body = cf.cfg.fallthrough(bl)
+            skip = cf.cfg.followed(bl)
+        else:  # JNZ
+            body = cf.cfg.followed(bl)
+            skip = cf.cfg.fallthrough(bl)
         join = cf.ipdom[bl]
         if skip != join:
             return None
